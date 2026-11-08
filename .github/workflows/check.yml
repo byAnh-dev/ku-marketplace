@@ -1,0 +1,27 @@
+name: Check marketplace
+on: [push, pull_request]
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose up --build --detach
+      - run: curl --fail --retry 20 --retry-connrefused --retry-delay 1 http://localhost:8080/health
+      - run: node tests/api-smoke.mjs
+      - if: failure()
+        run: docker compose logs api
+  mobile:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npx expo export --platform ios
