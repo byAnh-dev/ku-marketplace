@@ -19,11 +19,17 @@ Open the marketplace, search for **DORM** (a word in the lamp description), open
 | `GET /health` | Service health |
 | `GET /api/v1/listings?q=dorm` | Active listings; optional case-insensitive title/description search |
 | `GET /api/v1/listings/desk-lamp` | One public listing, including integer price in USD cents, seller display name, general pickup area and ordered photo URLs |
+| `POST /api/v1/listings` | Creates an active listing for the signed-in verified seller; `401`/`403` without a verified session, `422` with per-field errors |
 | `GET /api/v1/listings/bike` | 404 for sold item; missing IDs also return 404 |
 
 With the API running, run `node tests/api-smoke.mjs` from the root. Set `API_URL` if using a different host or port. In `frontend/`, run `npm run typecheck` and `npx expo export --platform ios` to check the TypeScript and bundle. GitHub Actions runs these checks and the API smoke test when the repository is pushed. A bundle export does not replace a simulator test.
 
 ## Sprint scope and next steps
+
+The `sprint-1` backend adds guarded My Listings list/detail routes and search
+regression tests. See [the backend integration contract](backend/README.md)
+for response shapes and frontend handoff. My Listings requires the accounts
+teammate's verified-session integration before it is usable outside tests.
 
 The [Sprint 1 requirements](https://docs.google.com/document/d/1-CAXYMrqLGVpVqagoc3pTq0-hFtWgDgeiopG4IKuBoI/edit) list eight stories. The [initial architecture](https://docs.google.com/document/d/1yfwpq67uj-kCq9D3l9fatBFhQF8GssEcRgc2EJTU-5M/edit) describes a larger plan. This repository uses React Native in place of SwiftUI and follows the explicit sprint list for search (R7). The client only talks to the API.
 
