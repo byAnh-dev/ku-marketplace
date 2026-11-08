@@ -26,10 +26,10 @@ With the API running, run `node tests/api-smoke.mjs` from the root. Set `API_URL
 
 ## Sprint scope and next steps
 
-The `sprint-1` backend adds guarded My Listings list/detail routes and search
-regression tests. See [the backend integration contract](backend/README.md)
-for response shapes and frontend handoff. My Listings requires the accounts
-teammate's verified-session integration before it is usable outside tests.
+The `sprint-1` backend adds guarded My Listings list/detail routes, the publish
+endpoint, live feed storage, KU account registration with email verification, and
+session login/logout. See [the backend integration contract](backend/README.md)
+for response shapes and frontend handoff.
 
 The [Sprint 1 requirements](https://docs.google.com/document/d/1-CAXYMrqLGVpVqagoc3pTq0-hFtWgDgeiopG4IKuBoI/edit) list eight stories. The [initial architecture](https://docs.google.com/document/d/1yfwpq67uj-kCq9D3l9fatBFhQF8GssEcRgc2EJTU-5M/edit) describes a larger plan. This repository uses React Native in place of SwiftUI and follows the explicit sprint list for search (R7). The client only talks to the API.
 
@@ -37,9 +37,9 @@ The [Sprint 1 requirements](https://docs.google.com/document/d/1-CAXYMrqLGVpVqag
 | --- | --- |
 | R1–2: Browse and details | API and app wired to sample data; active-only feed, unavailable detail, gallery/placeholder, loading, empty and retry states. |
 | R7: Search | Implemented against the sample catalog; preserve the query when returning from details. |
-| R3–4: Accounts and sessions | Planned. Require exact `ku.edu` domain and mailbox proof via an expiring single-use link. Use a managed identity service or reviewed password hashing, securely store the session on-device, revoke it on logout. |
-| R5, R8: Publish and My Listings | Planned. Add relational persistence, verified sessions, server-derived seller identity, client and server validation, and owner-only access for private listings and changes. |
+| R3–4: Accounts and sessions | Implemented for email and password: exact `ku.edu` domain, single-use verification link, Bcrypt hashing, digested 7-day sessions, device keychain storage, server-side revocation on logout. Google sign-in is still open. |
+| R5, R8: Publish and My Listings | Implemented against the in-memory catalog: server-derived seller, per-field validation on both sides, owner-only access, `401`/`403`/`422` handling. Relational persistence for listings is the next step. |
 | R6: Photo upload | Planned. Attach up to five ordered photos after listing creation. Check ownership, byte size, type and decodability before linking object storage keys. The first image is primary. |
 
-Open team decisions: identity/email service, relational database, image storage and HTTPS host. No write or authentication endpoints are exposed yet. Before GTA handoff, deploy an HTTPS API, test the iOS simulator build against it, and record the Xcode, simulator and toolchain versions. Messaging, offers, favorites and moderation are outside this starter.
+Open team decisions: production email provider credentials, listing persistence, image storage and HTTPS host. Before GTA handoff, deploy an HTTPS API, test the iOS simulator build against it, and record the Xcode, simulator and toolchain versions. Messaging, offers, favorites and moderation are outside this starter.
 

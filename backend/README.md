@@ -1,8 +1,28 @@
-# Sprint 1: My Listings and search
+# Sprint 1 backend: accounts, listings, and publish
 
-This backend slice supports My Listings and public search. It still uses an
-in-memory sample catalog. Session verification and persistent listing creation
-belong to the separate accounts/publish features.
+This backend serves the marketplace feed, publisher, My Listings, and KU student
+accounts. Accounts and sessions are stored in SQLite through Fluent; listings
+still live in one in-memory catalog, so published items are lost on restart.
+
+## Accounts and sessions
+
+- Registration accepts only an exact `@ku.edu` address, hashes the password with
+  Bcrypt, and stores the account unverified. A failed send deletes the new
+  account so a retry does not hit "email already exists".
+- Verification emails a single-use link valid for 30 minutes. `GET
+  /api/v1/auth/verify?token=...` marks the account verified and returns HTML for
+  the browser the link opens in.
+- Login returns a 7-day session token. Only its SHA-256 digest is stored, so a
+  database leak does not leak live sessions. Unverified accounts get `403`.
+- `SessionAuthenticator` runs on every request, resolves an `Authorization:
+  Bearer <token>` session into `MarketplaceUser(id:displayName:verified:)`, and
+  does nothing when no bearer token is present (no database work for public
+  requests).
+- Logout marks the credential used, revoking it immediately.
+
+Set `DEV_EMAIL_VERIFICATION=true` locally to log the verification link instead of
+sending mail. Without that flag or a `RESEND_API_KEY` plus
+`VERIFICATION_FROM_EMAIL`, registration returns `503`.
 
 ## Public feed
 
@@ -22,6 +42,11 @@ ahead of the sample rows; within a batch the newest is first.
 
 | Request | Success | Other responses |
 | --- | --- | --- |
+| `POST /api/v1/auth/register` | `200`, "check your KU email" | `400` bad input; `409` email taken; `503` mail not configured |
+| `GET /api/v1/auth/verify?token=` | `200` HTML confirmation | `400` invalid or expired link |
+| `POST /api/v1/auth/login` | `200`, `{ token, user }` | `401` bad credentials; `403` unverified |
+| `GET /api/v1/auth/me` | `200`, public user | `401` sign-in required |
+| `POST /api/v1/auth/logout` | `204` | `401` sign-in required |
 | `GET /api/v1/listings?q=dorm` | `200`, active listings matching title or description, ignoring case | |
 | `GET /api/v1/listings/:id` | `200`, public active listing | `404` unavailable |
 | `POST /api/v1/listings` | `201`, created listing plus `Location` | `401` sign-in required; `403` email not verified; `422` field errors; `400` malformed JSON |
@@ -74,26 +99,26 @@ The frontend form must mirror these rules for instant feedback. The server
 stays authoritative: never send `sellerDisplayName`, `ownerID`, `id`, or
 `status`, and expect them to be ignored if sent.
 
-## Accounts teammate integration
+## Account identity
 
-`MarketplaceUser` in `Sources/Marketplace/Routes.swift` is the authentication
-boundary. Register the verified-session authenticator before the protected
-route guard and, only after validating the session, call:
+`MarketplaceUser` in `Sources/Marketplace/Routes.swift` is the request principal
+the guards resolve; `SessionAuthenticator` logs it in only after validating a
+verified session, using the account's UUID string as `id` and its stored display
+name:
 
 ```swift
-request.auth.login(MarketplaceUser(id: verifiedAccountID,
-                                   displayName: accountDisplayName,
-                                   verified: accountIsVerified))
+request.auth.login(MarketplaceUser(id: id.uuidString,
+                                   displayName: account.displayName,
+                                   verified: true))
 ```
 
-The ID must match the listing's stored `ownerID`; the display name is what
-buyers see on a published listing. Never trust account IDs, display names, or
-the verified flag from headers, query parameters, or unverified tokens. The
-publish route re-checks `verified` and returns `403` when it is false, so a
-stale session cannot create listings. Sample IDs are `sam`, `avery`, and `jo`.
-The running server returns `401` for My Listings and publish requests until the
-accounts feature is integrated. There is no development login bypass. Only the
+Never trust account IDs, display names, or the verified flag from headers, query
+parameters, or unverified tokens. The publish route re-checks `verified` and
+returns `403` when it is false. There is no development login bypass; only the
 test target installs a fake authenticated user.
+
+Sample listings stay owned by the string IDs `sam`, `avery`, and `jo`, which no
+real account can match, so a signed-in student sees only what they published.
 
 ## Verification
 
