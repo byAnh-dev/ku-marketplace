@@ -101,4 +101,33 @@ private struct TestUser: AsyncMiddleware {
             }
         }
     }
+
+    @Test func emptyCatalogServesAnEmptyFeed() async throws {
+        try await withApp(configure: { app in configureRoutes(app, catalog: Catalog(rows: [])) }) { app in
+            try await app.testing().test(.GET, "api/v1/listings") { res async throws in
+                #expect(res.status == .ok)
+                #expect(try res.content.decode([Listing].self).isEmpty)
+            }
+        }
+    }
+
+    @Test func feedReflectsNewRowsWithoutARestart() async throws {
+        let catalog = Catalog(rows: [])
+        try await withApp(configure: { app in configureRoutes(app, catalog: catalog) }) { app in
+            for (id, title) in [("first", "Desk lamp"), ("second", "Bike lock")] {
+                catalog.add(Listing(id: id, title: title, description: "For a DORM room", priceCents: 1200,
+                                    condition: "Good", category: "Home", sellerDisplayName: "Alice",
+                                    pickupArea: "Campus", photoURLs: ["/photos/\(id).jpg"]),
+                            ownerID: "alice")
+            }
+            try await app.testing().test(.GET, "api/v1/listings") { res async throws in
+                let items = try res.content.decode([Listing].self)
+                #expect(items.map { $0.id } == ["second", "first"]) // newest first
+                #expect(items.first?.photoURLs.first == "/photos/second.jpg") // primary photo first
+            }
+            try await app.testing().test(.GET, "api/v1/listings/second") { res async in
+                #expect(res.status == .ok) // details route sees the same store
+            }
+        }
+    }
 }
