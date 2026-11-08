@@ -19,6 +19,7 @@ Open the marketplace, search for **DORM** (a word in the lamp description), open
 | `GET /health` | Service health |
 | `GET /api/v1/listings?q=dorm` | Active listings; optional case-insensitive title/description search |
 | `GET /api/v1/listings/desk-lamp` | One public listing, including integer price in USD cents, seller display name, general pickup area and ordered photo URLs |
+| `POST /api/v1/listings` | Creates an active listing for the signed-in verified seller; `401`/`403` without a verified session, `422` with per-field errors |
 | `GET /api/v1/listings/bike` | 404 for sold item; missing IDs also return 404 |
 
 With the API running, run `node tests/api-smoke.mjs` from the root. Set `API_URL` if using a different host or port. In `frontend/`, run `npm run typecheck` and `npx expo export --platform ios` to check the TypeScript and bundle. GitHub Actions runs these checks and the API smoke test when the repository is pushed. A bundle export does not replace a simulator test.
