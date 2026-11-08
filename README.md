@@ -25,6 +25,11 @@ With the API running, run `node tests/api-smoke.mjs` from the root. Set `API_URL
 
 ## Sprint scope and next steps
 
+The `sprint-1` backend adds guarded My Listings list/detail routes and search
+regression tests. See [the backend integration contract](backend/README.md)
+for response shapes and frontend handoff. My Listings requires the accounts
+teammate's verified-session integration before it is usable outside tests.
+
 The [Sprint 1 requirements](https://docs.google.com/document/d/1-CAXYMrqLGVpVqagoc3pTq0-hFtWgDgeiopG4IKuBoI/edit) list eight stories. The [initial architecture](https://docs.google.com/document/d/1yfwpq67uj-kCq9D3l9fatBFhQF8GssEcRgc2EJTU-5M/edit) describes a larger plan. This repository uses React Native in place of SwiftUI and follows the explicit sprint list for search (R7). The client only talks to the API.
 
 | Requirements | Starter coverage / next work |

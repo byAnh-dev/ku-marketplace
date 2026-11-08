@@ -5,6 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - run: docker build --target test -t marketplace-tests ./backend
       - run: docker compose up --build --detach
       - run: curl --fail --retry 20 --retry-connrefused --retry-delay 1 http://localhost:8080/health
       - run: node tests/api-smoke.mjs
