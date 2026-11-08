@@ -9,6 +9,7 @@ jobs:
       - run: docker compose up --build --detach
       - run: curl --fail --retry 20 --retry-connrefused --retry-delay 1 http://localhost:8080/health
       - run: node tests/api-smoke.mjs
+      - run: node tests/auth-smoke.mjs
       - if: failure()
         run: docker compose logs api
   mobile:
