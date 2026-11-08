@@ -23,4 +23,12 @@ for (const suffix of ['', '/desk-lamp']) {
   });
   assert.equal(response.status, 401);
 }
+// Publishing stays closed until a verified session authenticator is integrated.
+const publish = await fetch(base + path, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', Authorization: 'Bearer sam', 'X-User-ID': 'sam' },
+  body: JSON.stringify({ title: 'Desk lamp', description: 'Warm light.', priceCents: 1200, category: 'Home', condition: 'Good' }),
+});
+assert.equal(publish.status, 401, 'publish requires a verified session');
+assert.deepEqual(await get(path), feed, 'a rejected publish stores nothing');
 console.log('Marketplace API smoke checks passed.');
