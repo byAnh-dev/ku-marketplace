@@ -9,3 +9,6 @@ DerivedData/
 node_modules/
 .expo/
 dist/
+
+# Local SQLite database and its write-ahead log files.
+*.sqlite*
