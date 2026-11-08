@@ -76,18 +76,24 @@ stays authoritative: never send `sellerDisplayName`, `ownerID`, `id`, or
 
 ## Accounts teammate integration
 
-`MarketplaceUser` in `Sources/Marketplace/Routes.swift` is the authentication
-boundary. Register the verified-session authenticator before the protected
-route guard and, only after validating the session, call:
+`AuthenticatedMarketplaceUser` in `Sources/Marketplace/Routes.swift` is the
+request authentication identity. It is separate from the accounts feature's
+`MarketplaceUser` database model. Register the verified-session authenticator
+before the protected route guard and, only after validating the session, map
+the persisted account to the request identity:
 
 ```swift
-request.auth.login(MarketplaceUser(id: verifiedAccountID,
-                                   displayName: accountDisplayName,
-                                   verified: accountIsVerified))
+let accountID = try account.requireID().uuidString
+request.auth.login(AuthenticatedMarketplaceUser(id: accountID,
+                                               displayName: account.displayName,
+                                               verified: account.verified))
 ```
 
-The ID must match the listing's stored `ownerID`; the display name is what
-buyers see on a published listing. Never trust account IDs, display names, or
+Here `account` is the persisted account loaded from the validated session.
+Use the same UUID string representation for the listing's stored `ownerID`;
+the request identity keeps a String ID so existing sample IDs remain valid.
+The display name is what buyers see on a published listing.
+Never trust account IDs, display names, or
 the verified flag from headers, query parameters, or unverified tokens. The
 publish route re-checks `verified` and returns `403` when it is false, so a
 stale session cannot create listings. Sample IDs are `sam`, `avery`, and `jo`.
