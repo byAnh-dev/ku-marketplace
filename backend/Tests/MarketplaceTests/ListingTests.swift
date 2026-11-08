@@ -5,10 +5,27 @@ import VaporTesting
 // Only linked into the test target. No fake login is exposed by the server.
 private struct TestUser: AsyncMiddleware {
     let id: String
+    var displayName = "Test Seller"
+    var verified = true
     func respond(to request: Request, chainingTo next: any AsyncResponder) async throws -> Response {
-        request.auth.login(MarketplaceUser(id: id))
+        request.auth.login(MarketplaceUser(id: id, displayName: displayName, verified: verified))
         return try await next.respond(to: request)
     }
+}
+
+/// Publish body for tests, including fields the server must ignore so the
+/// forged-seller and forged-status cases can be exercised.
+private struct PublishBody: Content {
+    var title = "Gooseneck desk lamp"
+    var description = "Warm light with a clamp base."
+    var priceCents = 1200
+    var category = "Dorm essentials"
+    var condition = "Good"
+    var pickupArea: String? = nil
+    var sellerDisplayName: String? = nil
+    var ownerID: String? = nil
+    var id: String? = nil
+    var status: String? = nil
 }
 
 @Suite struct ListingTests {
