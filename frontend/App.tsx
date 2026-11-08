@@ -1,7 +1,10 @@
 import { useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { ActivityIndicator, Button, FlatList, Image, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { detail, Listing, search } from './src/api';
+import { AuthScreen } from './src/AuthScreen';
+import { logout, restoreSession, Session } from './src/auth';
 
 type State<T> = { phase: 'loading' } | { phase: 'error'; message: string } | { phase: 'ready'; value: T };
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
@@ -49,10 +52,11 @@ function Details({ id, back }: { id: string; back: () => void }) {
   </ScrollView>;
 }
 
-function Market({ query, setQuery, open }: { query: string; setQuery: (q: string) => void; open: (id: string) => void }) {
+function Market({ query, setQuery, open, account }: { query: string; setQuery: (q: string) => void; open: (id: string) => void; account: ReactNode }) {
   const { state, retry } = useResource(query, search);
   return <View style={[s.page, s.fill]}>
     <Text style={s.label}>UNIVERSITY OF KANSAS</Text><Text style={s.heading}>KU Marketplace</Text>
+    {account}
     <TextInput style={s.input} accessibilityLabel="Search listings" placeholder="Search items by keyword" placeholderTextColor="#606975" value={query} onChangeText={setQuery} />
     {query.length > 0 && <Button title="Clear search" onPress={() => setQuery('')} />}
     {state.phase !== 'ready' ? <Feedback state={state} retry={retry} /> :
@@ -68,8 +72,28 @@ function Market({ query, setQuery, open }: { query: string; setQuery: (q: string
 export default function App() {
   const [id, setId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [authOpen, setAuthOpen] = useState(false);
+  const [session, setSession] = useState<Session | null>(null);
+  const [restoring, setRestoring] = useState(true);
+  const [authError, setAuthError] = useState('');
+  const [signingOut, setSigningOut] = useState(false);
+  useEffect(() => { restoreSession().then(setSession).catch(() => {}).finally(() => setRestoring(false)); }, []);
+  async function signOut() {
+    if (!session) return;
+    setSigningOut(true); setAuthError('');
+    try { await logout(session.token); setSession(null); }
+    catch { setAuthError('Logout could not reach the server. Reconnect and retry to revoke your session.'); }
+    finally { setSigningOut(false); }
+  }
+  const account = restoring ? <ActivityIndicator /> : session ? <View style={{ gap: 4 }}>
+    <Text style={s.body}>Signed in as {session.user.displayName}</Text>
+    <Button title={signingOut ? 'Logging out...' : 'Log out'} disabled={signingOut} onPress={signOut} />
+    {!!authError && <Text style={s.body}>{authError}</Text>}
+  </View> : <Button title="Student login / register" onPress={() => setAuthOpen(true)} />;
   return <SafeAreaView style={s.fill}><StatusBar style="dark" />
-    {id ? <Details id={id} back={() => setId(null)} /> : <Market query={query} setQuery={setQuery} open={setId} />}
+    {authOpen ? <AuthScreen onBack={() => setAuthOpen(false)} onLogin={value => { setSession(value); setAuthOpen(false); }} /> :
+      id ? <Details id={id} back={() => setId(null)} /> :
+      <Market query={query} setQuery={setQuery} open={setId} account={account} />}
   </SafeAreaView>;
 }
 
