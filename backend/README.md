@@ -4,6 +4,20 @@ This backend slice supports My Listings and public search. It still uses an
 in-memory sample catalog. Session verification and persistent listing creation
 belong to the separate accounts/publish features.
 
+## Public feed
+
+`GET /api/v1/listings` and `GET /api/v1/listings/:id` read one in-memory listing
+store seeded with the sample rows, so rows added at runtime (by the publish
+endpoint later in this sprint) appear without a restart. Added rows surface
+ahead of the sample rows; within a batch the newest is first.
+
+- `photoURLs` is ordered: index 0 is the primary card photo. An empty array
+  means the client renders its placeholder.
+- Sold, reserved, and deleted rows never appear in the feed or on the public
+  details route. Only My Listings shows them.
+- `200 []` means no active listings; show the empty state. A `404` from the
+  public details route means the card is stale; refresh the feed.
+
 ## Frontend contract
 
 | Request | Success | Other responses |
