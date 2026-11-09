@@ -109,8 +109,9 @@ accounts only, set `DEV_EMAIL_VERIFICATION=true` before starting Compose. This
 prints verification links to backend logs instead of sending email. Keep this
 mode disabled for real accounts. The default is disabled.
 
-The frontend auth screens remain on the authentication branch. This backend
-integration does not add the publish or My Listings screens.
+The frontend now includes registration, verification instructions, login,
+session restoration and logout. The publish and My Listings screens remain
+future work.
 
 ## Verification
 
