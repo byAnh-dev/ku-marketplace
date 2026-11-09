@@ -74,6 +74,32 @@ The frontend form must mirror these rules for instant feedback. The server
 stays authoritative: never send `sellerDisplayName`, `ownerID`, `id`, or
 `status`, and expect them to be ignored if sent.
 
+## Photo upload contract
+
+`POST /api/v1/listings/:id/photos` attaches photos after the listing is created.
+It takes `multipart/form-data` with one part per image under the field name
+`photos[]`, in display order. The first part becomes the primary photo
+(`photoURLs[0]`). Each upload replaces the listing's previous photo set.
+
+| Rule | Detail |
+| --- | --- |
+| Count | 1 to 5 photos |
+| Type | JPEG, PNG or HEIC, checked from the file's bytes, not its name |
+| Size | at most 8 MB each |
+| Owner | only the verified seller of an **active** listing |
+
+| Response | Meaning |
+| --- | --- |
+| `200` | the updated listing, with `photoURLs` in upload order |
+| `401` / `403` | sign in / verify KU email |
+| `404` | missing, not active, or owned by someone else |
+| `422` | `fieldErrors.photos` explains the problem |
+
+Photo URLs are server paths such as `/uploads/listings/<id>/0-<uuid>.jpg`, served
+from `Public/`. Clients resolve them against the API base URL.
+ponytail: files live on local disk and are lost with the container, like the
+in-memory catalog; move them to the team's image storage when that is chosen.
+
 ## Accounts teammate integration
 
 `MarketplaceUser` in `Sources/Marketplace/Routes.swift` is the authentication
@@ -101,8 +127,9 @@ From the repo root run `docker build --target test -t marketplace-tests ./backen
 Alternatively run `swift test` inside `backend/` with a compatible toolchain.
 Tests cover unauthorized/forged identity, owner isolation, owned details, empty
 lists, deleted items, mixed-case title/description search, clear, no matches,
-live feed ordering, publish auth (`401`/`403`), per-field validation, and
-server-derived seller association.
+live feed ordering, publish auth (`401`/`403`), per-field validation,
+server-derived seller association, and photo upload (ordering, ownership,
+file type and count).
 They use [VaporTesting](https://docs.vapor.codes/advanced/testing/).
 
 With the API running, `node tests/api-smoke.mjs` checks the public API and denial

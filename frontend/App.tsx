@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Button, FlatList, Image, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { detail, Listing, search } from './src/api';
+import { ApiError, detail, Listing, photoURL, search } from './src/api';
 
-type State<T> = { phase: 'loading' } | { phase: 'error'; message: string } | { phase: 'ready'; value: T };
+type State<T> = { phase: 'loading' } | { phase: 'error'; message: string; unavailable: boolean } | { phase: 'ready'; value: T };
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
 function useResource<T>(key: string, load: (key: string, signal: AbortSignal) => Promise<T>) {
@@ -15,7 +15,7 @@ function useResource<T>(key: string, load: (key: string, signal: AbortSignal) =>
     load(key, request.signal).then(value => {
       if (!request.signal.aborted) set({ phase: 'ready', value });
     }).catch(error => {
-      if (!request.signal.aborted) set({ phase: 'error', message: error.message });
+      if (!request.signal.aborted) set({ phase: 'error', message: error.message, unavailable: error instanceof ApiError && error.status === 404 });
     });
     return () => request.abort();
   }, [key, load, attempt]);
@@ -23,12 +23,15 @@ function useResource<T>(key: string, load: (key: string, signal: AbortSignal) =>
 }
 
 function Feedback({ state, retry }: { state: Exclude<State<never>, {phase: 'ready'}>; retry: () => void }) {
-  return state.phase === 'loading' ? <ActivityIndicator accessibilityLabel="Loading listings" /> :
-    <View><Text style={s.body}>{state.message}</Text><Button title="Try again" onPress={retry} /></View>;
+  if (state.phase === 'loading') return <ActivityIndicator accessibilityLabel="Loading listings" />;
+  // A 404 won't change on retry: the item sold or was removed, so only "Back" helps.
+  if (state.unavailable) return <View><Text style={s.title}>{state.message}</Text>
+    <Text style={s.body}>It may have sold or been removed.</Text></View>;
+  return <View><Text style={s.body}>{state.message}</Text><Button title="Try again" onPress={retry} /></View>;
 }
 
 function Photo({ uri }: { uri?: string }) {
-  return uri ? <Image accessibilityLabel="Listing photo" source={{ uri }} style={s.photo} /> :
+  return uri ? <Image accessibilityLabel="Listing photo" source={{ uri: photoURL(uri) }} style={s.photo} /> :
     <View style={[s.photo, s.placeholder]}><Text style={s.label}>No photo</Text></View>;
 }
 

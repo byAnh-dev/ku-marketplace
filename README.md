@@ -20,6 +20,7 @@ Open the marketplace, search for **DORM** (a word in the lamp description), open
 | `GET /api/v1/listings?q=dorm` | Active listings; optional case-insensitive title/description search |
 | `GET /api/v1/listings/desk-lamp` | One public listing, including integer price in USD cents, seller display name, general pickup area and ordered photo URLs |
 | `POST /api/v1/listings` | Creates an active listing for the signed-in verified seller; `401`/`403` without a verified session, `422` with per-field errors |
+| `POST /api/v1/listings/:id/photos` | Owner attaches 1–5 ordered photos (multipart `photos[]`; first is primary); `401`/`403`/`404`/`422` like publish |
 | `GET /api/v1/listings/bike` | 404 for sold item; missing IDs also return 404 |
 
 With the API running, run `node tests/api-smoke.mjs` from the root. Set `API_URL` if using a different host or port. In `frontend/`, run `npm run typecheck` and `npx expo export --platform ios` to check the TypeScript and bundle. GitHub Actions runs these checks and the API smoke test when the repository is pushed. A bundle export does not replace a simulator test.
@@ -39,7 +40,7 @@ The [Sprint 1 requirements](https://docs.google.com/document/d/1-CAXYMrqLGVpVqag
 | R7: Search | Implemented against the sample catalog; preserve the query when returning from details. |
 | R3–4: Accounts and sessions | Planned. Require exact `ku.edu` domain and mailbox proof via an expiring single-use link. Use a managed identity service or reviewed password hashing, securely store the session on-device, revoke it on logout. |
 | R5, R8: Publish and My Listings | Planned. Add relational persistence, verified sessions, server-derived seller identity, client and server validation, and owner-only access for private listings and changes. |
-| R6: Photo upload | Planned. Attach up to five ordered photos after listing creation. Check ownership, byte size, type and decodability before linking object storage keys. The first image is primary. |
+| R6: Photo upload | API route and app picker (`frontend/src/PhotoPicker.tsx`) added: up to five ordered photos after listing creation, first is primary, ownership/size/type checked. Next: open the picker from the create-listing form after a `201`, and move files from local disk to the chosen image storage. Usable once verified sessions land. |
 
 Open team decisions: identity/email service, relational database, image storage and HTTPS host. No write or authentication endpoints are exposed yet. Before GTA handoff, deploy an HTTPS API, test the iOS simulator build against it, and record the Xcode, simulator and toolchain versions. Messaging, offers, favorites and moderation are outside this starter.
 

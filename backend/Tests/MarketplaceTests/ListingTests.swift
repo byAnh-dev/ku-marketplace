@@ -1,3 +1,4 @@
+import Foundation
 @testable import Marketplace
 import Testing
 import VaporTesting
@@ -222,5 +223,100 @@ private struct PublishBody: Content {
             #expect(entries.map { $0.listing.id } == [listing.id])
             #expect(entries.first?.status == .active)          // forged "sold" ignored
         }
+    }
+
+    // MARK: Photo upload
+
+    private static let jpeg: [UInt8] = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10]
+
+    /// A multipart body with one `photos[]` part per file, as the app sends it.
+    private func photoForm(_ files: [[UInt8]]) -> (HTTPMediaType, ByteBuffer) {
+        let boundary = "test-boundary"
+        var buffer = ByteBuffer()
+        for (index, bytes) in files.enumerated() {
+            buffer.writeString("--\(boundary)\r\nContent-Disposition: form-data; name=\"photos[]\"; filename=\"photo-\(index).jpg\"\r\nContent-Type: image/jpeg\r\n\r\n")
+            buffer.writeBytes(bytes)
+            buffer.writeString("\r\n")
+        }
+        buffer.writeString("--\(boundary)--\r\n")
+        return (HTTPMediaType(type: "multipart", subType: "form-data", parameters: ["boundary": boundary]), buffer)
+    }
+
+    /// Uploads land in a throwaway working directory, never in the repo.
+    private func scratchDirectory() -> String {
+        FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).path + "/"
+    }
+
+    @Test func ownerUploadsOrderedPhotosThatDetailsServe() async throws {
+        let catalog = fixture()
+        let directory = scratchDirectory()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        try await withApp(configure: { app in
+            app.directory = DirectoryConfiguration(workingDirectory: directory)
+            app.middleware.use(TestUser(id: "alice"))
+            configureRoutes(app, catalog: catalog)
+        }) { app in
+            let (type, body) = photoForm([Self.jpeg + [1], Self.jpeg + [2, 2]])
+            let response = try await app.testing().sendRequest(.POST, "api/v1/listings/active/photos", beforeRequest: { req in
+                req.headers.contentType = type
+                req.body = body
+            })
+            #expect(response.status == .ok)
+            let urls = try response.content.decode(Listing.self).photoURLs
+            #expect(urls.count == 2)
+            #expect(urls.allSatisfy { $0.hasPrefix("/uploads/listings/active/") && $0.hasSuffix(".jpg") })
+            #expect(urls.first?.hasPrefix("/uploads/listings/active/0-") == true) // first file is primary
+
+            let detail = try await app.testing().sendRequest(.GET, "api/v1/listings/active")
+            #expect(try detail.content.decode(Listing.self).photoURLs == urls)
+            let primary = try await app.testing().sendRequest(.GET, String(urls[0].dropFirst()))
+            #expect(primary.status == .ok)
+            #expect(primary.body.readableBytes == Self.jpeg.count + 1)
+        }
+    }
+
+    @Test func photoUploadRejectsStrangersAndBadFiles() async throws {
+        let catalog = fixture()
+        let directory = scratchDirectory()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        try await withApp(configure: { app in
+            app.directory = DirectoryConfiguration(workingDirectory: directory)
+            configureRoutes(app, catalog: catalog)
+        }) { app in
+            let (type, body) = photoForm([Self.jpeg])
+            let response = try await app.testing().sendRequest(.POST, "api/v1/listings/active/photos", beforeRequest: { req in
+                req.headers.bearerAuthorization = .init(token: "alice")
+                req.headers.contentType = type
+                req.body = body
+            })
+            #expect(response.status == .unauthorized)
+        }
+        try await withApp(configure: { app in
+            app.directory = DirectoryConfiguration(workingDirectory: directory)
+            app.middleware.use(TestUser(id: "alice"))
+            configureRoutes(app, catalog: catalog)
+        }) { app in
+            let html: [UInt8] = Array("<html>".utf8)
+            let cases: [(id: String, files: [[UInt8]], status: HTTPStatus)] = [
+                ("other", [Self.jpeg], .notFound),   // someone else's listing
+                ("sold", [Self.jpeg], .notFound),    // not active
+                ("missing", [Self.jpeg], .notFound),
+                ("active", [html], .unprocessableEntity),
+                ("active", Array(repeating: Self.jpeg, count: 6), .unprocessableEntity)
+            ]
+            for item in cases {
+                let (type, body) = photoForm(item.files)
+                let response = try await app.testing().sendRequest(.POST, "api/v1/listings/\(item.id)/photos", beforeRequest: { req in
+                    req.headers.contentType = type
+                    req.body = body
+                })
+                #expect(response.status == item.status, "\(item.id), \(item.files.count) file(s)")
+                if item.status == .unprocessableEntity {
+                    #expect(try response.content.decode(FieldErrorBody.self).fieldErrors.keys.contains("photos"))
+                }
+            }
+        }
+        #expect(catalog.active("active")?.photoURLs.isEmpty == true) // nothing was stored
+        #expect(catalog.active("other")?.photoURLs.isEmpty == true)
     }
 }
