@@ -5,6 +5,8 @@ Thumbs.db
 !.env.example
 .build/
 .swiftpm/
+*.sqlite
+*.sqlite-*
 DerivedData/
 node_modules/
 .expo/

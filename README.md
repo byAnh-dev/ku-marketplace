@@ -1,6 +1,6 @@
 # KU Marketplace
 
-An iOS-first marketplace for University of Kansas students. This Team 19 starter has a Swift/Vapor HTTP API in `backend/` and an Expo/React Native TypeScript app in `frontend/`. It runs without credentials or cloud services. The read-only catalog uses two active sample items and one sold item.
+An iOS-first marketplace for University of Kansas students. This Team 19 starter has a Swift/Vapor HTTP API in `backend/` and an Expo/React Native TypeScript app in `frontend/`. Public browsing runs without credentials or cloud services. The catalog starts with two active sample items and one sold item.
 
 ## Run locally
 
@@ -19,17 +19,17 @@ Open the marketplace, search for **DORM** (a word in the lamp description), open
 | `GET /health` | Service health |
 | `GET /api/v1/listings?q=dorm` | Active listings; optional case-insensitive title/description search |
 | `GET /api/v1/listings/desk-lamp` | One public listing, including integer price in USD cents, seller display name, general pickup area and ordered photo URLs |
-| `POST /api/v1/listings` | Creates an active listing for the signed-in verified seller; `401`/`403` without a verified session, `422` with per-field errors |
+| `POST /api/v1/listings` | Creates an active listing for the signed-in verified seller; `401` without a valid verified session, `422` with per-field errors |
 | `GET /api/v1/listings/bike` | 404 for sold item; missing IDs also return 404 |
 
 With the API running, run `node tests/api-smoke.mjs` from the root. Set `API_URL` if using a different host or port. In `frontend/`, run `npm run typecheck` and `npx expo export --platform ios` to check the TypeScript and bundle. GitHub Actions runs these checks and the API smoke test when the repository is pushed. A bundle export does not replace a simulator test.
 
 ## Sprint scope and next steps
 
-The `sprint-1` backend adds guarded My Listings list/detail routes and search
-regression tests. See [the backend integration contract](backend/README.md)
-for response shapes and frontend handoff. My Listings requires the accounts
-teammate's verified-session integration before it is usable outside tests.
+The `sprint-1` backend connects SQLite-backed account sessions to publishing
+and My Listings. See [the backend integration contract](backend/README.md)
+for response shapes, email configuration and frontend handoff. Accounts and
+sessions persist; listings still live in memory.
 
 The [Sprint 1 requirements](https://docs.google.com/document/d/1-CAXYMrqLGVpVqagoc3pTq0-hFtWgDgeiopG4IKuBoI/edit) list eight stories. The [initial architecture](https://docs.google.com/document/d/1yfwpq67uj-kCq9D3l9fatBFhQF8GssEcRgc2EJTU-5M/edit) describes a larger plan. This repository uses React Native in place of SwiftUI and follows the explicit sprint list for search (R7). The client only talks to the API.
 
@@ -37,9 +37,14 @@ The [Sprint 1 requirements](https://docs.google.com/document/d/1-CAXYMrqLGVpVqag
 | --- | --- |
 | R1–2: Browse and details | API and app wired to sample data; active-only feed, unavailable detail, gallery/placeholder, loading, empty and retry states. |
 | R7: Search | Implemented against the sample catalog; preserve the query when returning from details. |
-| R3–4: Accounts and sessions | Planned. Require exact `ku.edu` domain and mailbox proof via an expiring single-use link. Use a managed identity service or reviewed password hashing, securely store the session on-device, revoke it on logout. |
-| R5, R8: Publish and My Listings | Planned. Add relational persistence, verified sessions, server-derived seller identity, client and server validation, and owner-only access for private listings and changes. |
+| R3–4: Accounts and sessions | Backend registration, verification, password login and logout implemented with SQLite. Real sessions authorize protected listing routes. Frontend auth screens still need integration from the authentication branch; real email requires provider configuration. |
+| R5, R8: Publish and My Listings | Backend publishing, server validation, session-derived seller identity and owner-only reads implemented. Creation/My Listings screens, client validation and persistent listing storage remain. |
 | R6: Photo upload | Planned. Attach up to five ordered photos after listing creation. Check ownership, byte size, type and decodability before linking object storage keys. The first image is primary. |
 
-Open team decisions: identity/email service, relational database, image storage and HTTPS host. No write or authentication endpoints are exposed yet. Before GTA handoff, deploy an HTTPS API, test the iOS simulator build against it, and record the Xcode, simulator and toolchain versions. Messaging, offers, favorites and moderation are outside this starter.
+SQLite stores accounts and sessions. The backend includes a Resend email adapter;
+configure it as described in the backend README, or use development-only logged
+verification links with fictional accounts. Image storage and the HTTPS host
+remain open decisions. Before GTA handoff, deploy an HTTPS API, test the iOS
+simulator build against it, and record the Xcode, simulator and toolchain
+versions. Messaging, offers, favorites and moderation are outside this starter.
 

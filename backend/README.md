@@ -1,14 +1,14 @@
 # Sprint 1: My Listings and search
 
-This backend slice supports My Listings and public search. It still uses an
-in-memory sample catalog. Session verification and persistent listing creation
-belong to the separate accounts/publish features.
+This backend supports accounts, sessions, publishing, My Listings and public
+search. Accounts and credentials persist in SQLite. Listings still use an
+in-memory catalog and are lost when the backend restarts.
 
 ## Public feed
 
 `GET /api/v1/listings` and `GET /api/v1/listings/:id` read one in-memory listing
 store seeded with the sample rows, so rows added at runtime (by the publish
-endpoint later in this sprint) appear without a restart. Added rows surface
+endpoint) appear without a restart. Added rows surface
 ahead of the sample rows; within a batch the newest is first.
 
 - `photoURLs` is ordered: index 0 is the primary card photo. An empty array
@@ -24,7 +24,7 @@ ahead of the sample rows; within a batch the newest is first.
 | --- | --- | --- |
 | `GET /api/v1/listings?q=dorm` | `200`, active listings matching title or description, ignoring case | |
 | `GET /api/v1/listings/:id` | `200`, public active listing | `404` unavailable |
-| `POST /api/v1/listings` | `201`, created listing plus `Location` | `401` sign-in required; `403` email not verified; `422` field errors; `400` malformed JSON |
+| `POST /api/v1/listings` | `201`, created listing plus `Location` | `401` missing or invalid session; `422` field errors; `400` malformed JSON |
 | `GET /api/v1/me/listings` | `200`, array of owned entries | `401` sign-in required |
 | `GET /api/v1/me/listings/:id` | `200`, owned entry | `401` sign-in required; `404` missing, deleted, or owned by someone else |
 
@@ -65,8 +65,9 @@ and status are server-owned:
   "fieldErrors": { "title": "Title is required.", "priceCents": "Price must be between $0.01 and $100,000.00." } }
 ```
 
-`401` means prompt for sign-in. `403` means the account exists but the KU email
-is still unverified. A `201` returns the created listing with its server-minted
+`401` means the session is missing, invalid, expired, revoked, or belongs to an
+unverified account. Login itself returns `403` for an unverified account.
+A `201` returns the created listing with its server-minted
 `id`, so navigate with `Location` or the body `id`. Photos are attached by the
 separate photo-upload feature; `photoURLs` is empty at creation.
 
@@ -74,32 +75,42 @@ The frontend form must mirror these rules for instant feedback. The server
 stays authoritative: never send `sellerDisplayName`, `ownerID`, `id`, or
 `status`, and expect them to be ignored if sent.
 
-## Accounts teammate integration
+## Session authentication
 
-`AuthenticatedMarketplaceUser` in `Sources/Marketplace/Routes.swift` is the
-request authentication identity. It is separate from the accounts feature's
-`MarketplaceUser` database model. Register the verified-session authenticator
-before the protected route guard and, only after validating the session, map
-the persisted account to the request identity:
+`configureApplication` configures SQLite, applies the account migrations, and
+registers auth and listing routes. The Docker volume preserves accounts and
+credentials across container restarts. Tests use a separate in-memory SQLite
+database for each application.
 
-```swift
-let accountID = try account.requireID().uuidString
-request.auth.login(AuthenticatedMarketplaceUser(id: accountID,
-                                               displayName: account.displayName,
-                                               verified: account.verified))
-```
+The account API provides `POST /api/v1/auth/register`, `GET /api/v1/auth/verify`,
+`POST /api/v1/auth/login`, `GET /api/v1/auth/me`, and `POST /api/v1/auth/logout`.
+Registration requires an exact `ku.edu` email address and a matching password
+of 12–72 UTF-8 bytes. Email verification links expire after 30 minutes. Login
+requires a verified account and returns a session token valid for seven days.
 
-Here `account` is the persisted account loaded from the validated session.
-Use the same UUID string representation for the listing's stored `ownerID`;
-the request identity keeps a String ID so existing sample IDs remain valid.
-The display name is what buyers see on a published listing.
-Never trust account IDs, display names, or
-the verified flag from headers, query parameters, or unverified tokens. The
-publish route re-checks `verified` and returns `403` when it is false, so a
-stale session cannot create listings. Sample IDs are `sam`, `avery`, and `jo`.
-The running server returns `401` for My Listings and publish requests until the
-accounts feature is integrated. There is no development login bypass. Only the
-test target installs a fake authenticated user.
+Send `Authorization: Bearer <session token>` to publish or read My Listings.
+`SessionAuthenticator` runs before the listing guards. It uses `currentSession`
+to check the token hash, session kind, expiry, revocation and current account
+verification in SQLite. Auth profile and logout use the same validator.
+Missing or invalid credentials return `401`. Verification-link tokens cannot
+authorize listing requests. Logout revokes the presented session; other
+sessions for that account remain valid. Public browse and details do not
+require authentication.
+
+After validation, the authenticator creates `AuthenticatedMarketplaceUser`
+from the stored `MarketplaceUser`. Its String ID comes from
+`try account.requireID().uuidString`; publishing stores that exact value as
+`ownerID`. The client cannot choose the seller ID or verification state.
+Sample owners such as `sam` are fixtures, not real login accounts.
+
+For real email delivery, set `RESEND_API_KEY`, `VERIFICATION_FROM_EMAIL`, and
+`PUBLIC_API_URL` to the deployed HTTPS API URL. For local testing with fictional
+accounts only, set `DEV_EMAIL_VERIFICATION=true` before starting Compose. This
+prints verification links to backend logs instead of sending email. Keep this
+mode disabled for real accounts. The default is disabled.
+
+The frontend auth screens remain on the authentication branch. This backend
+integration does not add the publish or My Listings screens.
 
 ## Verification
 
@@ -108,8 +119,13 @@ Alternatively run `swift test` inside `backend/` with a compatible toolchain.
 Tests cover unauthorized/forged identity, owner isolation, owned details, empty
 lists, deleted items, mixed-case title/description search, clear, no matches,
 live feed ordering, publish auth (`401`/`403`), per-field validation, and
-server-derived seller association.
+server-derived seller association. `SessionTests` exercises real SQLite
+credentials, password login, UUID ownership, account isolation, expiry,
+revocation, wrong token kinds, unverified accounts, and logout. These tests do
+not install the fake identity helper used by the isolated listing tests.
 They use [VaporTesting](https://docs.vapor.codes/advanced/testing/).
 
 With the API running, `node tests/api-smoke.mjs` checks the public API and denial
-of unverified credentials. CI runs both checks.
+of unverified credentials. `node tests/auth-smoke.mjs` checks auth error paths.
+CI runs the Swift tests and both smoke scripts. Email delivery requires a
+separate provider check.

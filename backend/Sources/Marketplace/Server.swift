@@ -7,7 +7,7 @@ enum Server {
         try LoggingSystem.bootstrap(from: &env)
         let app = try await Application.make(env)
         do {
-            configureRoutes(app)
+            try await configureApplication(app)
             try await app.execute()
         } catch {
             try await app.asyncShutdown()

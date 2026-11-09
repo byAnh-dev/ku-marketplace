@@ -1,7 +1,7 @@
 import Foundation
 import Vapor
 
-// The accounts feature must log this in only after verifying a real session.
+// SessionAuthenticator logs this in only after verifying a real session.
 // Never trust a user ID supplied in query parameters or unverified headers.
 // This request identity is separate from the accounts feature's MarketplaceUser database model.
 struct AuthenticatedMarketplaceUser: Authenticatable, Sendable {
@@ -26,7 +26,7 @@ func configureRoutes(_ app: Application, catalog: Catalog = Catalog()) {
 
     // Publish. The guard rejects anonymous callers and the verified flag comes
     // from the session, so the client can never claim a seller or a status.
-    listings.grouped(AuthenticatedMarketplaceUser.guardMiddleware()).post { req async throws -> Response in
+    listings.grouped(SessionAuthenticator(), AuthenticatedMarketplaceUser.guardMiddleware()).post { req async throws -> Response in
         let user = try req.auth.require(AuthenticatedMarketplaceUser.self)
         guard user.verified else {
             throw Abort(.forbidden, reason: "Verify your KU email before publishing.")
@@ -51,7 +51,7 @@ func configureRoutes(_ app: Application, catalog: Catalog = Catalog()) {
     }
 
     let mine = app.grouped("api", "v1", "me", "listings")
-        .grouped(AuthenticatedMarketplaceUser.guardMiddleware())
+        .grouped(SessionAuthenticator(), AuthenticatedMarketplaceUser.guardMiddleware())
     mine.get { req -> [OwnedListing] in
         let user = try req.auth.require(AuthenticatedMarketplaceUser.self)
         return catalog.owned(by: user.id)
