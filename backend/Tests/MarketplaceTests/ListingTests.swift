@@ -8,7 +8,7 @@ private struct TestUser: AsyncMiddleware {
     var displayName = "Test Seller"
     var verified = true
     func respond(to request: Request, chainingTo next: any AsyncResponder) async throws -> Response {
-        request.auth.login(AuthenticatedMarketplaceUser(id: id, displayName: displayName, verified: verified))
+        request.auth.login(AuthenticatedUser(id: id, displayName: displayName, verified: verified))
         return try await next.respond(to: request)
     }
 }

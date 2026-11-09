@@ -97,11 +97,16 @@ authorize listing requests. Logout revokes the presented session; other
 sessions for that account remain valid. Public browse and details do not
 require authentication.
 
-After validation, the authenticator creates `AuthenticatedMarketplaceUser`
-from the stored `MarketplaceUser`. Its String ID comes from
+After validation, the authenticator creates `AuthenticatedUser`
+from the stored `Account`. Its String ID comes from
 `try account.requireID().uuidString`; publishing stores that exact value as
 `ownerID`. The client cannot choose the seller ID or verification state.
 Sample owners such as `sam` are fixtures, not real login accounts.
+
+`Account` is the Fluent database model in `Accounts.swift`; `AuthenticatedUser`
+is the request identity used by route guards. The table remains
+`marketplace_users`, and the migration remains `CreateMarketplaceUsers` so the
+Swift model rename does not recreate tables in existing sprint-1 databases.
 
 For real email delivery, set `RESEND_API_KEY`, `VERIFICATION_FROM_EMAIL`, and
 `PUBLIC_API_URL` to the deployed HTTPS API URL. For local testing with fictional

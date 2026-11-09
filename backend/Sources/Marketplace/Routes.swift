@@ -3,8 +3,8 @@ import Vapor
 
 // SessionAuthenticator logs this in only after verifying a real session.
 // Never trust a user ID supplied in query parameters or unverified headers.
-// This request identity is separate from the accounts feature's MarketplaceUser database model.
-struct AuthenticatedMarketplaceUser: Authenticatable, Sendable {
+// A validated request identity, separate from the stored Account model.
+struct AuthenticatedUser: Authenticatable, Sendable {
     let id: String
     let displayName: String
     let verified: Bool
@@ -26,8 +26,8 @@ func configureRoutes(_ app: Application, catalog: Catalog = Catalog()) {
 
     // Publish. The guard rejects anonymous callers and the verified flag comes
     // from the session, so the client can never claim a seller or a status.
-    listings.grouped(SessionAuthenticator(), AuthenticatedMarketplaceUser.guardMiddleware()).post { req async throws -> Response in
-        let user = try req.auth.require(AuthenticatedMarketplaceUser.self)
+    listings.grouped(SessionAuthenticator(), AuthenticatedUser.guardMiddleware()).post { req async throws -> Response in
+        let user = try req.auth.require(AuthenticatedUser.self)
         guard user.verified else {
             throw Abort(.forbidden, reason: "Verify your KU email before publishing.")
         }
@@ -51,13 +51,13 @@ func configureRoutes(_ app: Application, catalog: Catalog = Catalog()) {
     }
 
     let mine = app.grouped("api", "v1", "me", "listings")
-        .grouped(SessionAuthenticator(), AuthenticatedMarketplaceUser.guardMiddleware())
+        .grouped(SessionAuthenticator(), AuthenticatedUser.guardMiddleware())
     mine.get { req -> [OwnedListing] in
-        let user = try req.auth.require(AuthenticatedMarketplaceUser.self)
+        let user = try req.auth.require(AuthenticatedUser.self)
         return catalog.owned(by: user.id)
     }
     mine.get(":id") { req -> OwnedListing in
-        let user = try req.auth.require(AuthenticatedMarketplaceUser.self)
+        let user = try req.auth.require(AuthenticatedUser.self)
         guard let id = req.parameters.get("id"),
               let listing = catalog.owned(by: user.id).first(where: { $0.listing.id == id }) else {
             throw Abort(.notFound, reason: "This listing is unavailable.")

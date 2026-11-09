@@ -20,9 +20,9 @@ import VaporTesting
         var sellerDisplayName = "Forged seller"
     }
 
-    private func account(_ app: Application, email: String, verified: Bool = true) async throws -> MarketplaceUser {
+    private func account(_ app: Application, email: String, verified: Bool = true) async throws -> Account {
         let hash = try await app.password.async.hash(password)
-        let user = MarketplaceUser(displayName: "Same display name", email: email, passwordHash: hash)
+        let user = Account(displayName: "Same display name", email: email, passwordHash: hash)
         user.verified = verified
         try await user.create(on: app.db)
         return user
@@ -38,7 +38,7 @@ import VaporTesting
 
     // Independent fixture construction lets invalid credential kinds, expiry,
     // and revocation exercise the database boundary without bypassing it.
-    private func credential(_ app: Application, user: MarketplaceUser, kind: String = "session",
+    private func credential(_ app: Application, user: Account, kind: String = "session",
                             expiresAt: Date = Date().addingTimeInterval(3600), used: Bool = false) async throws -> String {
         let token = UUID().uuidString + UUID().uuidString
         let hash = SHA256.hash(data: Data(token.utf8)).map { String(format: "%02x", $0) }.joined()

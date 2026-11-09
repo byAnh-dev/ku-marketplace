@@ -60,11 +60,11 @@ func registerAuthRoutes(_ app: Application) {
             (Environment.get("RESEND_API_KEY") != nil && Environment.get("VERIFICATION_FROM_EMAIL") != nil) else {
             throw Abort(.serviceUnavailable, reason: "Email verification is not configured.")
         }
-        guard try await MarketplaceUser.query(on: req.db).filter(\.$email == email).first() == nil else {
+        guard try await Account.query(on: req.db).filter(\.$email == email).first() == nil else {
             throw Abort(.conflict, reason: "An account with this email already exists.")
         }
         let hash = try await req.password.async.hash(data.password)
-        let user = MarketplaceUser(displayName: name, email: email, passwordHash: hash)
+        let user = Account(displayName: name, email: email, passwordHash: hash)
         do { try await user.create(on: req.db) }
         catch { throw Abort(.conflict, reason: "An account with this email already exists.") }
         let token = newToken()
@@ -87,14 +87,14 @@ func registerAuthRoutes(_ app: Application) {
                 .filter(\.$tokenHash == sessionTokenDigest(token)).filter(\.$kind == "verification")
                 .filter(\.$used == false).first(),
               credential.expiresAt > Date(),
-              let user = try await MarketplaceUser.find(credential.userID, on: req.db) else {
+              let user = try await Account.find(credential.userID, on: req.db) else {
             throw Abort(.badRequest, reason: "Verification link is invalid or expired.")
         }
         credential.used = true
         user.verified = true
         try await user.save(on: req.db)
         try await credential.save(on: req.db)
-        var response = Response(status: .ok)
+        let response = Response(status: .ok)
         response.headers.contentType = .html
         response.body = .init(string: "<html><body><h2>KU Marketplace email verified.</h2><p>Return to the app to log in.</p></body></html>")
         return response
@@ -103,7 +103,7 @@ func registerAuthRoutes(_ app: Application) {
     auth.post("login") { req async throws -> LoginResponse in
         let data = try req.content.decode(LoginBody.self)
         let email = normalizedEmail(data.email)
-        guard validKUEmail(email), let user = try await MarketplaceUser.query(on: req.db).filter(\.$email == email).first(),
+        guard validKUEmail(email), let user = try await Account.query(on: req.db).filter(\.$email == email).first(),
               try await req.password.async.verify(data.password, created: user.passwordHash) else {
             throw Abort(.unauthorized, reason: "Incorrect email or password.")
         }

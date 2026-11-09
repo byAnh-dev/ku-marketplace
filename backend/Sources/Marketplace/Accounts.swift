@@ -1,7 +1,8 @@
 import Fluent
 import Vapor
 
-final class MarketplaceUser: Model, @unchecked Sendable {
+final class Account: Model, @unchecked Sendable {
+    // Keep the existing table name so renaming the Swift model preserves data.
     static let schema = "marketplace_users"
     @ID(key: .id) var id: UUID?
     @Field(key: "display_name") var displayName: String
@@ -39,9 +40,10 @@ final class AuthCredential: Model, @unchecked Sendable {
     }
 }
 
+// Fluent records this migration's type name. Keep it stable for existing databases.
 struct CreateMarketplaceUsers: AsyncMigration {
     func prepare(on db: any Database) async throws {
-        try await db.schema(MarketplaceUser.schema)
+        try await db.schema(Account.schema)
             .id()
             .field("display_name", .string, .required)
             .field("email", .string, .required)
@@ -51,7 +53,7 @@ struct CreateMarketplaceUsers: AsyncMigration {
             .create()
         try await db.schema(AuthCredential.schema)
             .id()
-            .field("user_id", .uuid, .required, .references(MarketplaceUser.schema, "id", onDelete: .cascade))
+            .field("user_id", .uuid, .required, .references(Account.schema, "id", onDelete: .cascade))
             .field("token_hash", .string, .required)
             .unique(on: "token_hash")
             .field("kind", .string, .required)
@@ -61,7 +63,7 @@ struct CreateMarketplaceUsers: AsyncMigration {
     }
     func revert(on db: any Database) async throws {
         try await db.schema(AuthCredential.schema).delete()
-        try await db.schema(MarketplaceUser.schema).delete()
+        try await db.schema(Account.schema).delete()
     }
 }
 
@@ -79,7 +81,7 @@ struct PublicUser: Content {
     let displayName: String
     let email: String
     let verified: Bool
-    init(_ user: MarketplaceUser) throws {
+    init(_ user: Account) throws {
         self.id = try user.requireID()
         self.displayName = user.displayName
         self.email = user.email
