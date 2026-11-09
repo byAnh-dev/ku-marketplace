@@ -53,13 +53,31 @@ struct PhotoStorage: Sendable {
 
     func replace(listingID: String, ownerID: String, with upload: PhotoUpload,
                  catalog: Catalog, on req: Request) async throws -> Listing {
-        try await req.application.threadPool.runIfActive(eventLoop: req.eventLoop) {
-            try self.store(listingID: listingID, ownerID: ownerID, upload: upload, catalog: catalog, logger: req.logger)
+        let urls = try await req.application.threadPool.runIfActive(eventLoop: req.eventLoop) {
+            try self.store(listingID: listingID, upload: upload)
         }.get()
+        let replacement: (listing: Listing, previousPhotoURLs: [String])
+        do {
+            guard let saved = try await catalog.replacePhotos(urls, listingID: listingID, ownerID: ownerID) else {
+                throw Abort(.notFound, reason: "This listing is unavailable.")
+            }
+            replacement = saved
+        } catch {
+            // The database still references the old set. Remove only this failed upload.
+            try? await req.application.threadPool.runIfActive(eventLoop: req.eventLoop) {
+                self.removeGenerations(urls, listingID: listingID, logger: req.logger)
+            }.get()
+            throw error
+        }
+        // The database transaction has committed. Cleanup failure must not undo or
+        // report failure for a successfully published replacement.
+        try? await req.application.threadPool.runIfActive(eventLoop: req.eventLoop) {
+            self.removeGenerations(replacement.previousPhotoURLs, listingID: listingID, logger: req.logger)
+        }.get()
+        return replacement.listing
     }
 
-    private func store(listingID: String, ownerID: String, upload: PhotoUpload,
-                       catalog: Catalog, logger: Logger) throws -> Listing {
+    private func store(listingID: String, upload: PhotoUpload) throws -> [String] {
         guard !listingID.isEmpty, listingID.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }) else {
             throw Abort(.notFound)
         }
@@ -69,10 +87,10 @@ struct PhotoStorage: Sendable {
         let pending = root.appendingPathComponent("uploads/.staging/\(generation)", isDirectory: true)
         let relative = "uploads/listings/\(listingID)/\(generation)/"
         let destination = root.appendingPathComponent(relative, isDirectory: true)
-        var committed = false
+        var ready = false
         defer {
             try? manager.removeItem(at: pending)
-            if !committed { try? manager.removeItem(at: destination) }
+            if !ready { try? manager.removeItem(at: destination) }
         }
 
         try manager.createDirectory(at: pending, withIntermediateDirectories: true)
@@ -84,24 +102,25 @@ struct PhotoStorage: Sendable {
         }
         try manager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
         try manager.moveItem(at: pending, to: destination)
-        guard let replacement = catalog.replacePhotos(urls, listingID: listingID, ownerID: ownerID) else {
-            throw Abort(.notFound, reason: "This listing is unavailable.")
-        }
-        committed = true
+        ready = true
+        return urls
+    }
 
-        // Every upload owns a distinct directory. The locked catalog swap returns
-        // exactly the displaced version, so concurrent cleanup cannot delete a winner.
+    private func removeGenerations(_ urls: [String], listingID: String, logger: Logger) {
+        let manager = FileManager.default
+        let root = URL(fileURLWithPath: publicDirectory, isDirectory: true)
+        // The committed transaction returns exactly the displaced version, so
+        // concurrent cleanup cannot delete the version currently in the database.
         let prefix = "/uploads/listings/\(listingID)/"
-        let oldGenerations = Set(replacement.previousPhotoURLs.compactMap { path -> String? in
+        let generations = Set(urls.compactMap { path -> String? in
             guard path.hasPrefix(prefix) else { return nil }
             let pieces = path.dropFirst(prefix.count).split(separator: "/")
             guard pieces.count == 2, UUID(uuidString: String(pieces[0])) != nil else { return nil }
             return String(pieces[0])
         })
-        for old in oldGenerations where old != generation {
+        for old in generations {
             do { try manager.removeItem(at: root.appendingPathComponent("uploads/listings/\(listingID)/\(old)")) }
             catch { logger.warning("Could not remove a superseded listing photo set.") }
         }
-        return replacement.listing
     }
 }

@@ -1,4 +1,5 @@
 @testable import Marketplace
+import Fluent
 import Testing
 import VaporTesting
 
@@ -29,14 +30,14 @@ private struct PublishBody: Content {
 }
 
 @Suite struct ListingTests {
-    private func fixture() -> Catalog {
-        Catalog(rows: [
+    private func fixture() -> [Catalog.Row] {
+        [
             row("active", owner: "alice", status: .active),
             row("sold", owner: "alice", status: .sold),
             row("reserved", owner: "alice", status: .reserved),
             row("deleted", owner: "alice", status: .deleted),
             row("other", owner: "bob", status: .active)
-        ])
+        ]
     }
 
     private func row(_ id: String, owner: String, status: Catalog.Status) -> Catalog.Row {
@@ -47,7 +48,7 @@ private struct PublishBody: Content {
     }
 
     @Test func anonymousAndForgedIdentityAreRejected() async throws {
-        try await withApp(configure: { app in configureRoutes(app) }) { app in
+        try await withApp(configure: { app in _ = try await configureApplication(app) }) { app in
             for path in ["api/v1/me/listings", "api/v1/me/listings/desk-lamp", "api/v1/me/listings?userId=sam&ownerID=sam"] {
                 try await app.testing().test(.GET, path, beforeRequest: { req in
                     req.headers.add(name: "X-User-ID", value: "sam")
@@ -60,10 +61,10 @@ private struct PublishBody: Content {
     }
 
     @Test func ownerListAndDetails() async throws {
-        let catalog = fixture()
+        let rows = fixture()
         try await withApp(configure: { app in
             app.middleware.use(TestUser(id: "alice"))
-            configureRoutes(app, catalog: catalog)
+            _ = try await configureApplication(app, seedListings: rows)
         }) { app in
             try await app.testing().test(.GET, "api/v1/me/listings?ownerID=bob") { res async throws in
                 #expect(res.status == .ok)
@@ -88,7 +89,7 @@ private struct PublishBody: Content {
     @Test func newUserHasEmptyList() async throws {
         try await withApp(configure: { app in
             app.middleware.use(TestUser(id: "new-user"))
-            configureRoutes(app)
+            _ = try await configureApplication(app)
         }) { app in
             try await app.testing().test(.GET, "api/v1/me/listings") { res async throws in
                 #expect(res.status == .ok)
@@ -98,8 +99,8 @@ private struct PublishBody: Content {
     }
 
     @Test func searchAndClearOnlyReturnActiveItems() async throws {
-        let catalog = fixture()
-        try await withApp(configure: { app in configureRoutes(app, catalog: catalog) }) { app in
+        let rows = fixture()
+        try await withApp(configure: { app in _ = try await configureApplication(app, seedListings: rows) }) { app in
             for suffix in ["", "?q=", "?q=%20%0A%20", "?q=dEsK", "?q=%20dOrM%20"] {
                 try await app.testing().test(.GET, "api/v1/listings\(suffix)") { res async throws in
                     #expect(res.status == .ok)
@@ -120,7 +121,7 @@ private struct PublishBody: Content {
     }
 
     @Test func emptyCatalogServesAnEmptyFeed() async throws {
-        try await withApp(configure: { app in configureRoutes(app, catalog: Catalog(rows: [])) }) { app in
+        try await withApp(configure: { app in _ = try await configureApplication(app, seedListings: []) }) { app in
             try await app.testing().test(.GET, "api/v1/listings") { res async throws in
                 #expect(res.status == .ok)
                 #expect(try res.content.decode([Listing].self).isEmpty)
@@ -129,10 +130,10 @@ private struct PublishBody: Content {
     }
 
     @Test func feedReflectsNewRowsWithoutARestart() async throws {
-        let catalog = Catalog(rows: [])
-        try await withApp(configure: { app in configureRoutes(app, catalog: catalog) }) { app in
+        try await withApp(configure: { app in _ = try await configureApplication(app, seedListings: []) }) { app in
+            let catalog = Catalog(database: app.db)
             for (id, title) in [("first", "Desk lamp"), ("second", "Bike lock")] {
-                catalog.add(Listing(id: id, title: title, description: "For a DORM room", priceCents: 1200,
+                try await catalog.add(Listing(id: id, title: title, description: "For a DORM room", priceCents: 1200,
                                     condition: "Good", category: "Home", sellerDisplayName: "Alice",
                                     pickupArea: "Campus", photoURLs: ["/photos/\(id).jpg"]),
                             ownerID: "alice")
@@ -149,31 +150,31 @@ private struct PublishBody: Content {
     }
 
     @Test func publishRejectsAnonymousAndUnverifiedSellers() async throws {
-        let catalog = Catalog(rows: [])
-        try await withApp(configure: { app in configureRoutes(app, catalog: catalog) }) { app in
+        try await withApp(configure: { app in _ = try await configureApplication(app, seedListings: []) }) { app in
             let response = try await app.testing().sendRequest(.POST, "api/v1/listings", beforeRequest: { req in
                 req.headers.bearerAuthorization = .init(token: "sam")
                 req.headers.add(name: "X-User-ID", value: "alice")
                 try req.content.encode(PublishBody())
             })
             #expect(response.status == .unauthorized)
+            #expect(try await Catalog(database: app.db).search("").isEmpty)
         }
         try await withApp(configure: { app in
             app.middleware.use(TestUser(id: "alice", verified: false))
-            configureRoutes(app, catalog: catalog)
+            _ = try await configureApplication(app, seedListings: [])
         }) { app in
             let response = try await app.testing().sendRequest(.POST, "api/v1/listings", beforeRequest: { req in
                 try req.content.encode(PublishBody())
             })
             #expect(response.status == .forbidden)
+            #expect(try await Catalog(database: app.db).search("").isEmpty)
         }
-        #expect(catalog.search("").isEmpty) // neither request stored a row
     }
 
     @Test func publishReportsEveryInvalidField() async throws {
         try await withApp(configure: { app in
             app.middleware.use(TestUser(id: "alice"))
-            configureRoutes(app, catalog: Catalog(rows: []))
+            _ = try await configureApplication(app, seedListings: [])
         }) { app in
             let response = try await app.testing().sendRequest(.POST, "api/v1/listings", beforeRequest: { req in
                 try req.content.encode(PublishBody(
@@ -193,10 +194,9 @@ private struct PublishBody: Content {
     }
 
     @Test func publishAssociatesTheSessionSellerAndAppearsEverywhere() async throws {
-        let catalog = Catalog(rows: [])
         try await withApp(configure: { app in
             app.middleware.use(TestUser(id: "alice", displayName: "Alice"))
-            configureRoutes(app, catalog: catalog)
+            _ = try await configureApplication(app, seedListings: [])
         }) { app in
             // Forged seller, status, and id: all must be ignored.
             let response = try await app.testing().sendRequest(.POST, "api/v1/listings", beforeRequest: { req in

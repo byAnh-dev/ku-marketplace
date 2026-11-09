@@ -66,10 +66,10 @@ import VaporTesting
     }
 
     @Test func realLoginPublishesWithUUIDOwnerAndIsolation() async throws {
-        let catalog = Catalog(rows: [])
         try await withApp(configure: { app in
-            try await configureApplication(app, catalog: catalog)
+            _ = try await configureApplication(app, seedListings: [])
         }) { app in
+            let catalog = Catalog(database: app.db)
             let alice = try await account(app, email: "alice@ku.edu")
             let bob = try await account(app, email: "bob@ku.edu")
             let aliceID = try alice.requireID().uuidString
@@ -85,8 +85,8 @@ import VaporTesting
             try #require(published.status == .created)
             let listing = try published.content.decode(Listing.self)
             #expect(listing.sellerDisplayName == alice.displayName)
-            #expect(catalog.owned(by: aliceID).map { $0.listing.id } == [listing.id])
-            #expect(catalog.owned(by: bobID).isEmpty)
+            #expect(try await catalog.owned(by: aliceID).map { $0.listing.id } == [listing.id])
+            #expect(try await catalog.owned(by: bobID).isEmpty)
 
             let own = try await app.testing().sendRequest(.GET, "api/v1/me/listings?ownerID=\(bobID)", beforeRequest: { req in
                 req.headers.bearerAuthorization = .init(token: aliceToken)
@@ -119,10 +119,10 @@ import VaporTesting
     }
 
     @Test func invalidSessionsCannotReadOwnedListingsOrPublish() async throws {
-        let catalog = Catalog(rows: [])
         try await withApp(configure: { app in
-            try await configureApplication(app, catalog: catalog)
+            _ = try await configureApplication(app, seedListings: [])
         }) { app in
+            let catalog = Catalog(database: app.db)
             let verified = try await account(app, email: "verified@ku.edu")
             let unverified = try await account(app, email: "unverified@ku.edu", verified: false)
             let expired = try await credential(app, user: verified, expiresAt: Date().addingTimeInterval(-1))
@@ -135,15 +135,15 @@ import VaporTesting
             for token in [nil, "short", forged, expired, expiresNow, revoked, verificationLink, unverifiedSession] as [String?] {
                 try await expectDenied(app, token: token)
             }
-            #expect(catalog.search("").isEmpty)
+            #expect(try await catalog.search("").isEmpty)
         }
     }
 
     @Test func logoutRevokesOnlyThePresentedSession() async throws {
-        let catalog = Catalog(rows: [])
         try await withApp(configure: { app in
-            try await configureApplication(app, catalog: catalog)
+            _ = try await configureApplication(app, seedListings: [])
         }) { app in
+            let catalog = Catalog(database: app.db)
             let user = try await account(app, email: "logout@ku.edu")
             let first = try await login(app, email: user.email)
             let second = try await login(app, email: user.email)
@@ -158,7 +158,7 @@ import VaporTesting
             })
             #expect(logout.status == .noContent)
             try await expectDenied(app, token: first, detailID: listing.id)
-            #expect(catalog.search("").count == 1)
+            #expect(try await catalog.search("").count == 1)
 
             let stillSignedIn = try await app.testing().sendRequest(.GET, "api/v1/me/listings", beforeRequest: { req in
                 req.headers.bearerAuthorization = .init(token: second)
@@ -175,7 +175,7 @@ import VaporTesting
 
     @Test func loginRejectsWrongPasswordAndUnverifiedAccountsWithoutCreatingSessions() async throws {
         try await withApp(configure: { app in
-            try await configureApplication(app, catalog: Catalog(rows: []))
+            _ = try await configureApplication(app, seedListings: [])
         }) { app in
             let verified = try await account(app, email: "password@ku.edu")
             let unverified = try await account(app, email: "pending@ku.edu", verified: false)
@@ -192,10 +192,10 @@ import VaporTesting
     }
 
     @Test func accountVerificationIsRecheckedForAnExistingSession() async throws {
-        let catalog = Catalog(rows: [])
         try await withApp(configure: { app in
-            try await configureApplication(app, catalog: catalog)
+            _ = try await configureApplication(app, seedListings: [])
         }) { app in
+            let catalog = Catalog(database: app.db)
             let user = try await account(app, email: "recheck@ku.edu")
             let token = try await login(app, email: user.email)
             let before = try await app.testing().sendRequest(.GET, "api/v1/me/listings", beforeRequest: { req in
@@ -205,7 +205,7 @@ import VaporTesting
             user.verified = false
             try await user.save(on: app.db)
             try await expectDenied(app, token: token)
-            #expect(catalog.search("").isEmpty)
+            #expect(try await catalog.search("").isEmpty)
         }
     }
 }

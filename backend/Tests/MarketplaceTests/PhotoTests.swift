@@ -58,15 +58,15 @@ import VaporTesting
         })
     }
 
-    private func withPhotoApp(catalog: Catalog = Catalog(rows: []),
+    private func withPhotoApp(seedListings: [Catalog.Row] = [],
                               _ body: (Application, Catalog, String) async throws -> Void) async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("photo-tests-\(UUID().uuidString)").path + "/"
         defer { try? FileManager.default.removeItem(atPath: directory) }
         try await withApp(configure: { app in
             app.directory = DirectoryConfiguration(workingDirectory: directory)
-            try await configureApplication(app, catalog: catalog)
+            _ = try await configureApplication(app, seedListings: seedListings)
         }) { app in
-            try await body(app, catalog, directory + "Public/")
+            try await body(app, Catalog(database: app.db), directory + "Public/")
         }
     }
 
@@ -96,7 +96,7 @@ import VaporTesting
             #expect(bytes[1].starts(with: [0xff, 0xd8, 0xff]))
             let detail = try await app.testing().sendRequest(.GET, "api/v1/listings/\(listing.id)")
             #expect(try detail.content.decode(Listing.self).photoURLs == urls)
-            #expect(catalog.active(listing.id)?.photoURLs == urls)
+            #expect(try await catalog.active(listing.id)?.photoURLs == urls)
 
             let replacement = try await upload(app, id: listing.id, files: [Self.jpeg], token: token)
             try #require(replacement.status == .ok)
@@ -104,7 +104,7 @@ import VaporTesting
             #expect(updated.count == 1)
             #expect(updated != urls)
             _ = try await servedBytes(app, urls: updated)
-            #expect(catalog.active(listing.id)?.photoURLs == updated)
+            #expect(try await catalog.active(listing.id)?.photoURLs == updated)
             for old in urls {
                 #expect(try await app.testing().sendRequest(.GET, String(old.dropFirst())).status == .notFound)
             }
@@ -116,7 +116,7 @@ import VaporTesting
             #expect(normalizedURLs[0].hasSuffix(".jpg"))
             let normalizedBytes = try await servedBytes(app, urls: normalizedURLs)
             #expect(normalizedBytes[0].starts(with: [0xff, 0xd8, 0xff]))
-            #expect(catalog.active(listing.id)?.photoURLs == normalizedURLs)
+            #expect(try await catalog.active(listing.id)?.photoURLs == normalizedURLs)
         }
     }
 
@@ -124,8 +124,7 @@ import VaporTesting
         let ownerID = UUID()
         let sold = Listing(id: "sold", title: "Sold desk", description: "Already sold.", priceCents: 2500,
                            condition: "Good", category: "Furniture", sellerDisplayName: "Photo owner", pickupArea: "Campus", photoURLs: [])
-        let catalog = Catalog(rows: [.init(ownerID: ownerID.uuidString, status: .sold, listing: sold)])
-        try await withPhotoApp(catalog: catalog) { app, catalog, _ in
+        try await withPhotoApp(seedListings: [.init(ownerID: ownerID.uuidString, status: .sold, listing: sold)]) { app, catalog, _ in
             let (owner, token) = try await account(app, email: "owner@ku.edu", id: ownerID)
             let (_, strangerToken) = try await account(app, email: "stranger@ku.edu")
             let listing = try await publish(app, token: token)
@@ -151,7 +150,7 @@ import VaporTesting
 
             let malformed = try await upload(app, id: listing.id, files: [], token: token, malformed: true)
             #expect(malformed.status == .badRequest)
-            #expect(catalog.active(listing.id)?.photoURLs == urls)
+            #expect(try await catalog.active(listing.id)?.photoURLs == urls)
 
             let oversized = Self.png + [UInt8](repeating: 0, count: 8 * 1024 * 1024 + 1 - Self.png.count)
             let invalid: [[[UInt8]]] = [[], Array(repeating: Self.png, count: 6), [oversized],
@@ -160,7 +159,7 @@ import VaporTesting
                 let response = try await upload(app, id: listing.id, files: files, token: token)
                 try #require(response.status == .unprocessableEntity)
                 #expect(try response.content.decode(FieldErrorBody.self).fieldErrors["photos"] != nil)
-                #expect(catalog.active(listing.id)?.photoURLs == urls)
+                #expect(try await catalog.active(listing.id)?.photoURLs == urls)
             }
             #expect(try await servedBytes(app, urls: urls) == originalBytes)
         }
@@ -181,7 +180,7 @@ import VaporTesting
             try Data("not a directory".utf8).write(to: URL(fileURLWithPath: staging))
             let failure = try await upload(app, id: listing.id, files: [Self.jpeg, Self.png], token: token)
             #expect(failure.status == .internalServerError)
-            #expect(catalog.active(listing.id)?.photoURLs == urls)
+            #expect(try await catalog.active(listing.id)?.photoURLs == urls)
             #expect(try await servedBytes(app, urls: urls) == originalBytes)
         }
     }
@@ -199,7 +198,7 @@ import VaporTesting
                 try #require(response.status == .ok)
                 acceptedSets.append(try response.content.decode(Listing.self).photoURLs)
             }
-            let current = try #require(catalog.active(listing.id)?.photoURLs)
+            let current = try #require(try await catalog.active(listing.id)?.photoURLs)
             #expect(acceptedSets.contains(current))
             #expect(Set(current).count == current.count)
             _ = try await servedBytes(app, urls: current)

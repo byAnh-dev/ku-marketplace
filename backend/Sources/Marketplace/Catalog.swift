@@ -1,4 +1,5 @@
 import Foundation
+import Fluent
 import Vapor
 
 struct Listing: Content {
@@ -8,11 +9,8 @@ struct Listing: Content {
     let photoURLs: [String] // Primary photo first; never include storage credentials.
 }
 
-/// One process-wide listing store shared by the read feed, owned listings, and
-/// the publish endpoint, so a created listing is discoverable immediately.
-/// ponytail: in-memory and lost on restart; move the rows into a Fluent model when
-/// the accounts feature brings a database. Method signatures stay the same.
-final class Catalog: @unchecked Sendable {
+/// All listing routes read the same database, including after an application restart.
+struct Catalog: Sendable {
     enum Status: String, Codable, Sendable { case active, sold, reserved, deleted }
     struct Row: Sendable {
         let ownerID: String
@@ -20,67 +18,64 @@ final class Catalog: @unchecked Sendable {
         let listing: Listing
     }
 
-    private let lock = NSLock()
-    private var rows: [Row]
-
-    init(rows: [Row]? = nil) {
-        self.rows = rows ?? Self.samples
-    }
+    let database: any Database
 
     /// Active listings only, newest first. A blank query means every active item.
-    func search(_ query: String) -> [Listing] {
+    func search(_ query: String) async throws -> [Listing] {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return snapshot().compactMap { row in
-            guard row.status == .active else { return nil }
-            let item = row.listing
+        let records = try await ListingRecord.query(on: database)
+            .filter(\.$status == Status.active.rawValue).sort(\.$id, .descending).all()
+        // Preserve Swift's existing Unicode case folding and literal substring search.
+        return records.compactMap { record in
+            let item = record.listing
             return term.isEmpty || item.title.lowercased().contains(term) || item.description.lowercased().contains(term) ? item : nil
         }
     }
 
-    func active(_ id: String) -> Listing? {
-        snapshot().first { $0.status == .active && $0.listing.id == id }?.listing
+    func active(_ id: String) async throws -> Listing? {
+        try await ListingRecord.query(on: database).filter(\.$listingID == id)
+            .filter(\.$status == Status.active.rawValue).first()?.listing
     }
 
-    func owned(by ownerID: String) -> [OwnedListing] {
-        snapshot().filter { $0.ownerID == ownerID && $0.status != .deleted }
-            .map { OwnedListing(status: $0.status, listing: $0.listing) }
+    func owned(by ownerID: String) async throws -> [OwnedListing] {
+        let records = try await ListingRecord.query(on: database).filter(\.$ownerID == ownerID)
+            .filter(\.$status != Status.deleted.rawValue).sort(\.$id, .descending).all()
+        return try records.map { record in
+            guard let status = Status(rawValue: record.status) else {
+                throw Abort(.internalServerError, reason: "Stored listing status is invalid.")
+            }
+            return OwnedListing(status: status, listing: record.listing)
+        }
     }
 
     /// Only the publish route calls this: after validation, with seller fields
     /// taken from the authenticated account. Newest listings surface first.
-    func add(_ listing: Listing, ownerID: String) {
-        lock.lock()
-        defer { lock.unlock() }
-        rows.insert(Row(ownerID: ownerID, status: .active, listing: listing), at: 0)
+    func add(_ listing: Listing, ownerID: String) async throws {
+        try await ListingRecord(row: Row(ownerID: ownerID, status: .active, listing: listing)).create(on: database)
     }
 
     /// Replaces the photo set of an active listing the caller owns. `urls` must
     /// already be in display order: the first one is the primary photo.
-    /// Returns the displaced URLs under the same lock for safe file cleanup.
+    /// Returns the displaced URLs only after the transaction commits, for safe file cleanup.
     /// Returns nil when the listing is missing, not active, or owned by someone else.
-    func replacePhotos(_ urls: [String], listingID: String, ownerID: String) -> (listing: Listing, previousPhotoURLs: [String])? {
-        lock.lock()
-        defer { lock.unlock() }
-        guard let index = rows.firstIndex(where: {
-            $0.ownerID == ownerID && $0.status == .active && $0.listing.id == listingID
-        }) else { return nil }
-        let row = rows[index]
-        let old = row.listing
-        let updated = Listing(
-            id: old.id, title: old.title, description: old.description,
-            priceCents: old.priceCents, condition: old.condition, category: old.category,
-            sellerDisplayName: old.sellerDisplayName, pickupArea: old.pickupArea, photoURLs: urls)
-        rows[index] = Row(ownerID: row.ownerID, status: row.status, listing: updated)
-        return (updated, old.photoURLs)
+    func replacePhotos(_ urls: [String], listingID: String, ownerID: String) async throws -> (listing: Listing, previousPhotoURLs: [String])? {
+        try await database.transaction { db in
+            // The first statement obtains SQLite's write lock before reading the old
+            // URLs. A deferred read-then-write transaction can otherwise fail to upgrade
+            // its lock or read a version another uploader is about to replace.
+            try await ListingRecord.query(on: db).filter(\.$listingID == listingID)
+                .filter(\.$ownerID == ownerID).filter(\.$status == Status.active.rawValue)
+                .set(\.$status, to: Status.active.rawValue).update()
+            guard let record = try await ListingRecord.query(on: db).filter(\.$listingID == listingID)
+                .filter(\.$ownerID == ownerID).filter(\.$status == Status.active.rawValue).first() else { return nil }
+            let previous = record.photoURLs
+            record.photoURLs = urls
+            try await record.update(on: db)
+            return (record.listing, previous)
+        }
     }
 
-    private func snapshot() -> [Row] {
-        lock.lock()
-        defer { lock.unlock() }
-        return rows
-    }
-
-    private static let samples: [Row] = zip(["sam", "avery", "jo"], sampleListings).map {
+    static let samples: [Row] = zip(["sam", "avery", "jo"], sampleListings).map {
         Row(ownerID: $0.0, status: $0.1.0, listing: $0.1.1)
     }
     private static let sampleListings: [(Status, Listing)] = [

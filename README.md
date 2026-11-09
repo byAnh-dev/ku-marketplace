@@ -55,8 +55,8 @@ With the API running, run `node tests/api-smoke.mjs` from the root. Set `API_URL
 
 The `sprint-1` backend connects SQLite-backed account sessions to publishing
 and My Listings. See [the backend integration contract](backend/README.md)
-for response shapes, email configuration and frontend handoff. Accounts and
-sessions persist; listings still live in memory.
+for response shapes, email configuration and frontend handoff. Accounts,
+sessions, listings and ordered photo links persist in SQLite.
 
 The [Sprint 1 requirements](https://docs.google.com/document/d/1-CAXYMrqLGVpVqagoc3pTq0-hFtWgDgeiopG4IKuBoI/edit) list eight stories. The [initial architecture](https://docs.google.com/document/d/1yfwpq67uj-kCq9D3l9fatBFhQF8GssEcRgc2EJTU-5M/edit) describes a larger plan. This repository uses React Native in place of SwiftUI and follows the explicit sprint list for search (R7). The client only talks to the API.
 
@@ -65,15 +65,15 @@ The [Sprint 1 requirements](https://docs.google.com/document/d/1-CAXYMrqLGVpVqag
 | R1–2: Browse and details | API and app wired to sample data; active-only feed, unavailable detail, gallery/placeholder, loading, empty and retry states. |
 | R7: Search | Implemented against the sample catalog; preserve the query when returning from details. |
 | R3–4: Accounts and sessions | Registration, verification instructions, password login, session restoration and logout connected in the app. SQLite-backed sessions authorize protected listing routes. Native tokens use SecureStore; real email requires provider configuration. |
-| R5, R8: Publish and My Listings | Authenticated creation and My Listings screens connected to existing backend validation and owner-only reads. Persistent listing storage remains. |
+| R5, R8: Publish and My Listings | Authenticated creation and My Listings screens connected to backend validation and owner-only reads. Listings, ownership, status and ordered photo links persist across backend restarts. |
 | R6: Photo upload | Owner-authorized upload, image decoding, ordering and replacement connected in the app. Files use a persistent local Docker volume; the first image is primary. |
 
-SQLite stores accounts and sessions. The backend includes a Resend email adapter;
+SQLite stores accounts, sessions and listings. The backend includes a Resend email adapter;
 configure it as described in the backend README, or use development-only logged
 verification links with fictional accounts. Uploaded files persist in the
-`marketplace-uploads` Docker volume, but listing records and their photo links
-still reset when the backend restarts. Persistent listings and the HTTPS host
-remain deployment work. Before GTA handoff, deploy an HTTPS API, test the iOS
+`marketplace-uploads` Docker volume; listing records and photo links persist in
+the `marketplace-data` volume. Preserve both volumes when recreating containers.
+The HTTPS host remains deployment work. Before GTA handoff, deploy an HTTPS API, test the iOS
 simulator build against it, and record the Xcode, simulator and toolchain
 versions. Messaging, offers, favorites and moderation are outside this starter.
 

@@ -1,15 +1,22 @@
 # Sprint 1: My Listings and search
 
 This backend supports accounts, sessions, publishing, My Listings and public
-search. Accounts and credentials persist in SQLite. Listings still use an
-in-memory catalog and are lost when the backend restarts.
+search. Accounts, credentials, listings and ordered photo links persist in
+SQLite. Uploaded image bytes live in the separate upload directory.
 
 ## Public feed
 
-`GET /api/v1/listings` and `GET /api/v1/listings/:id` read one in-memory listing
-store seeded with the sample rows, so rows added at runtime (by the publish
-endpoint) appear without a restart. Added rows surface
-ahead of the sample rows; within a batch the newest is first.
+`GET /api/v1/listings` and `GET /api/v1/listings/:id` read the SQLite catalog.
+Published listings appear immediately and survive a restart. Newest listings
+appear first; a database sequence keeps their order stable across restarts.
+The listing migration inserts the sample rows once, preserving their existing
+IDs and order. Later startups do not reinsert or overwrite those rows.
+
+The additive listing migration preserves existing account and credential
+tables. It stores each listing's public ID, owner ID, status, details and
+ordered photo URLs. Real owner IDs remain the account UUID strings; sample
+owners such as `sam` remain demo identities. The public API shapes are unchanged.
+Listings already lost by restarting an older in-memory backend cannot be recovered.
 
 - `photoURLs` is ordered: index 0 is the primary card photo. An empty array
   means the client renders its placeholder.
@@ -91,23 +98,28 @@ macOS or `apt install libvips-dev libheif-plugin-libde265` on Ubuntu 24.04.
 The Dockerfile installs both libvips and the HEIC decoder plugin.
 
 Each upload writes a separate staging directory, moves the complete set into
-place, then swaps the catalog URLs under its lock. Validation or write failure
+place, then replaces its database URLs in a transaction. Validation or write failure
 keeps the old set; concurrent uploads cannot mix files or delete the winning
-set. Superseded files are removed after the swap. A process crash can leave
+set. Superseded files are removed only after the database commit. A failed
+database write removes the new files and preserves the old links and files.
+A process crash can leave
 unreferenced files; no background garbage collection is included.
 
 URLs under `/uploads/listings/` are public. Compose mounts
 `marketplace-uploads` at `/app/Public/uploads`. Preserve that volume when
-recreating containers. Listing records remain in memory: a backend restart
-loses the records and their photo links even though image files survive.
-Multiple backend replicas require shared storage and persistent listings.
+recreating containers. The `marketplace-data` volume holds the SQLite database
+at `/data/marketplace.sqlite`, including listing records and their photo links.
+Preserve and back up both volumes together. A normal backend restart preserves
+both records and files; `docker compose down -v` deletes the volumes.
+This remains a single-host deployment. Multiple backend replicas need a
+deployment design that shares both the database and image storage safely.
 
 ## Session authentication
 
-`configureApplication` configures SQLite, applies the account migrations, and
-registers auth and listing routes. The Docker volume preserves accounts and
-credentials across container restarts. Tests use a separate in-memory SQLite
-database for each application.
+`configureApplication` configures SQLite, applies the account and listing migrations,
+and registers auth and listing routes. The database volume preserves accounts,
+credentials and listings across container restarts. Most tests use a separate
+in-memory SQLite database; persistence tests reopen a temporary database file.
 
 The account API provides `POST /api/v1/auth/register`, `GET /api/v1/auth/verify`,
 `POST /api/v1/auth/login`, `GET /api/v1/auth/me`, and `POST /api/v1/auth/logout`.
@@ -162,6 +174,11 @@ storage. It covers ordered upload/public retrieval, owner and session guards,
 corrupt and oversized inputs, replacement, filesystem failure and concurrent
 uploads. Frontend component tests substitute the device picker and native
 multipart encoder; verify library permissions and upload on a device as well.
+
+`PersistenceTests` closes and reopens a temporary SQLite file to check listing
+details, ordering, saved sessions, ownership, ordered photo links and public
+image bytes. It also checks upgrades from the account-only schema and safe
+recovery when the listing migration has completed before its history is saved.
 
 With the API running, `node tests/api-smoke.mjs` checks the public API and denial
 of unverified credentials. `node tests/auth-smoke.mjs` checks auth error paths.
