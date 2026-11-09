@@ -54,6 +54,26 @@ final class Catalog: @unchecked Sendable {
         rows.insert(Row(ownerID: ownerID, status: .active, listing: listing), at: 0)
     }
 
+    /// Replaces the photo set of an active listing the caller owns. `urls` must
+    /// already be in display order: the first one is the primary photo.
+    /// Returns the displaced URLs under the same lock for safe file cleanup.
+    /// Returns nil when the listing is missing, not active, or owned by someone else.
+    func replacePhotos(_ urls: [String], listingID: String, ownerID: String) -> (listing: Listing, previousPhotoURLs: [String])? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let index = rows.firstIndex(where: {
+            $0.ownerID == ownerID && $0.status == .active && $0.listing.id == listingID
+        }) else { return nil }
+        let row = rows[index]
+        let old = row.listing
+        let updated = Listing(
+            id: old.id, title: old.title, description: old.description,
+            priceCents: old.priceCents, condition: old.condition, category: old.category,
+            sellerDisplayName: old.sellerDisplayName, pickupArea: old.pickupArea, photoURLs: urls)
+        rows[index] = Row(ownerID: row.ownerID, status: row.status, listing: updated)
+        return (updated, old.photoURLs)
+    }
+
     private func snapshot() -> [Row] {
         lock.lock()
         defer { lock.unlock() }

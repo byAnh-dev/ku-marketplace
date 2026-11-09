@@ -1,11 +1,12 @@
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, Button, FlatList, Image, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { detail, Listing, search } from './src/api';
+import { ApiError, detail, Listing, photoURL, search } from './src/api';
 import { AuthScreen } from './src/AuthScreen';
 import { logout, restoreSession, Session } from './src/auth';
+import { MyListings } from './src/MyListings';
 
-type State<T> = { phase: 'loading' } | { phase: 'error'; message: string } | { phase: 'ready'; value: T };
+type State<T> = { phase: 'loading' } | { phase: 'error'; message: string; unavailable: boolean } | { phase: 'ready'; value: T };
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
 function useResource<T>(key: string, load: (key: string, signal: AbortSignal) => Promise<T>) {
@@ -17,7 +18,7 @@ function useResource<T>(key: string, load: (key: string, signal: AbortSignal) =>
     load(key, request.signal).then(value => {
       if (!request.signal.aborted) set({ phase: 'ready', value });
     }).catch(error => {
-      if (!request.signal.aborted) set({ phase: 'error', message: error.message });
+      if (!request.signal.aborted) set({ phase: 'error', message: error.message, unavailable: error instanceof ApiError && error.status === 404 });
     });
     return () => request.abort();
   }, [key, load, attempt]);
@@ -25,12 +26,14 @@ function useResource<T>(key: string, load: (key: string, signal: AbortSignal) =>
 }
 
 function Feedback({ state, retry }: { state: Exclude<State<never>, {phase: 'ready'}>; retry: () => void }) {
-  return state.phase === 'loading' ? <ActivityIndicator accessibilityLabel="Loading listings" /> :
-    <View><Text style={s.body}>{state.message}</Text><Button title="Try again" onPress={retry} /></View>;
+  if (state.phase === 'loading') return <ActivityIndicator accessibilityLabel="Loading listings" />;
+  return <View><Text style={s.body}>{state.message}</Text>
+    {state.unavailable ? <Text style={s.body}>It may have sold or been removed.</Text> : <Button title="Try again" onPress={retry} />}
+  </View>;
 }
 
 function Photo({ uri }: { uri?: string }) {
-  return uri ? <Image accessibilityLabel="Listing photo" source={{ uri }} style={s.photo} /> :
+  return uri ? <Image accessibilityLabel="Listing photo" source={{ uri: photoURL(uri) }} style={s.photo} /> :
     <View style={[s.photo, s.placeholder]}><Text style={s.label}>No photo</Text></View>;
 }
 
@@ -72,6 +75,7 @@ export default function App() {
   const [id, setId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [authOpen, setAuthOpen] = useState(false);
+  const [myListingsOpen, setMyListingsOpen] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [restoring, setRestoring] = useState(true);
   const [restoreAttempt, setRestoreAttempt] = useState(0);
@@ -95,16 +99,22 @@ export default function App() {
     catch { setAuthError('Could not finish logging out. Check your connection and try again.'); }
     finally { setSigningOut(false); }
   }
+  function sessionExpired() {
+    setSession(null); setMyListingsOpen(false); setAuthOpen(true);
+  }
   const account = restoring ? <ActivityIndicator accessibilityLabel="Restoring session" /> : restoreError ? <View>
     <Text accessibilityRole="alert" style={s.body}>{restoreError}</Text>
     <Button title="Retry session" onPress={() => setRestoreAttempt(n => n + 1)} />
   </View> : session ? <View style={{ gap: 4 }}>
     <Text style={s.body}>Signed in as {session.user.displayName}</Text>
+    <Button title="My listings" disabled={signingOut} onPress={() => setMyListingsOpen(true)} />
     <Button title={signingOut ? 'Logging out...' : 'Log out'} disabled={signingOut} onPress={signOut} />
     {!!authError && <Text accessibilityRole="alert" style={s.body}>{authError}</Text>}
   </View> : <Button title="Student login / register" onPress={() => setAuthOpen(true)} />;
   return <SafeAreaView style={s.fill}><StatusBar style="dark" />
     {authOpen ? <AuthScreen onBack={() => setAuthOpen(false)} onLogin={value => { setSession(value); setAuthError(''); setAuthOpen(false); }} /> :
+      myListingsOpen && session ? <MyListings token={session.token} onBack={() => setMyListingsOpen(false)}
+        onOpen={listing => { setMyListingsOpen(false); setId(listing.id); }} onSessionExpired={sessionExpired} /> :
       id ? <Details id={id} back={() => setId(null)} /> :
       <Market query={query} setQuery={setQuery} open={setId} account={account} />}
   </SafeAreaView>;

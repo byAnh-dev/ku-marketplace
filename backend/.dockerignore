@@ -3,3 +3,4 @@
 .env*
 *.sqlite
 *.sqlite-*
+Public/uploads/

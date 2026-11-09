@@ -11,7 +11,12 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0")
     ],
     targets: [
+        .systemLibrary(name: "CVips", pkgConfig: "vips", providers: [
+            .apt(["libvips-dev", "libheif-plugin-libde265"]), .brew(["vips"])
+        ]),
+        .target(name: "PhotoDecoder", dependencies: ["CVips"]),
         .executableTarget(name: "Marketplace", dependencies: [
+            .target(name: "PhotoDecoder"),
             .product(name: "Vapor", package: "vapor"),
             .product(name: "Fluent", package: "fluent"),
             .product(name: "FluentSQLiteDriver", package: "fluent-sqlite-driver"),

@@ -11,5 +11,7 @@ services:
       VERIFICATION_FROM_EMAIL: ${VERIFICATION_FROM_EMAIL:-}
     volumes:
       - marketplace-data:/data
+      - marketplace-uploads:/app/Public/uploads
 volumes:
   marketplace-data:
+  marketplace-uploads:

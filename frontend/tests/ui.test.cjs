@@ -25,6 +25,7 @@ function harness(storedToken) {
   const storage = new Map(storedToken ? [[sessionKey, storedToken]] : []);
   const requests = [];
   const replies = new Map();
+  const pickerResults = [];
   const native = {
     Platform: { OS: 'ios' }, StyleSheet: { create: value => value },
     ...Object.fromEntries(['ActivityIndicator', 'Button', 'Image', 'Pressable',
@@ -45,14 +46,27 @@ function harness(storedToken) {
       react: React, 'react/jsx-runtime': require('react/jsx-runtime'),
       'react-native': native, 'expo-status-bar': { StatusBar: 'StatusBar' },
       'expo-secure-store': secureStore,
+      'expo-image-picker': {
+        launchImageLibraryAsync: async () => {
+          assert.ok(pickerResults.length, 'Queue a device picker result first');
+          const next = pickerResults.shift();
+          if (next instanceof Error) throw next;
+          return await next;
+        },
+      },
     },
     globals: {
+      // React Native accepts local file objects; Node's FormData only accepts Blobs.
+      FormData: class {
+        parts = [];
+        append(name, value) { this.parts.push({ name, value }); }
+      },
       fetch: async (url, options = {}) => {
         const route = new URL(url).pathname;
         requests.push({ url: String(url), ...options, headers: new Headers(options.headers) });
-        if (route === '/api/v1/listings') return response(200, [listing]);
-        if (route === '/api/v1/listings/desk-1') return response(200, listing);
         const queue = replies.get(route);
+        if (!queue?.length && route === '/api/v1/listings' && (!options.method || options.method === 'GET')) return response(200, [listing]);
+        if (!queue?.length && route === '/api/v1/listings/desk-1') return response(200, listing);
         assert.ok(queue?.length, `Unexpected request: ${route}`);
         const next = queue.shift();
         if (next instanceof Error) throw next;
@@ -61,14 +75,18 @@ function harness(storedToken) {
     },
   });
   function queue(route, value) {
-    const key = `/api/v1/auth/${route}`;
+    const key = route.startsWith('/') ? route : `/api/v1/auth/${route}`;
     if (!replies.has(key)) replies.set(key, []);
     replies.get(key).push(value);
   }
   return {
     App: load(path.resolve(__dirname, '../App.tsx')).default,
     AuthScreen: load(path.resolve(__dirname, '../src/AuthScreen.tsx')).AuthScreen,
+    AddPhotos: load(path.resolve(__dirname, '../src/PhotoPicker.tsx')).AddPhotos,
+    PhotoPicker: load(path.resolve(__dirname, '../src/PhotoPicker.tsx')).PhotoPicker,
+    api: load(path.resolve(__dirname, '../src/api.ts')),
     storage, requests,
+    pick: result => pickerResults.push(result),
     reply: (route, status, body) => queue(route, response(status, body)),
     offline: route => queue(route, new Error('Network unavailable')),
     defer(route) {
@@ -90,7 +108,7 @@ function hasText(ui, expected) {
 function control(ui, label) {
   const matches = ui.container.queryAll(node =>
     (node.type === 'Button' && node.props.title === label) ||
-    (node.type === 'Pressable' && text(node) === label));
+    (node.type === 'Pressable' && (text(node) === label || node.props.accessibilityLabel === label)));
   assert.equal(matches.length, 1, `Expected one control named ${label}`);
   return matches[0];
 }
@@ -252,4 +270,119 @@ test('an in-flight account request disables navigation, mode changes, and creden
   assert.equal(control(ui, 'Back to marketplace').props.disabled, false);
   assert.ok(ui.container.queryAll(node => node.type === 'TextInput').every(node => node.props.editable === true));
   assert.ok(hasText(ui, 'Incorrect email or password.'));
+});
+
+test('photo selection preserves order, handles library errors, and sends the session in multipart uploads', async t => {
+  const h = harness();
+  let completed;
+  const ui = await mount(t, h.AddPhotos, { listingId: listing.id, token, onDone: value => { completed = value; }, onBack() {}, onSessionExpired() {} });
+  h.pick(new Error('Photo permission denied'));
+  await press(ui, 'Add photos');
+  assert.ok(hasText(ui, 'Could not open your photo library.'));
+  h.pick({ canceled: true, assets: null });
+  await press(ui, 'Add photos');
+  assert.equal(control(ui, 'Upload photos').props.disabled, true);
+  h.pick({ canceled: false, assets: [
+    { uri: 'file:///first.png', mimeType: 'image/png', fileSize: 100 },
+    { uri: 'file:///first.png', mimeType: 'image/png', fileSize: 100 },
+    { uri: 'file:///second.jpg', mimeType: 'image/jpeg', fileSize: 100 },
+    { uri: 'file:///oversized.jpg', mimeType: 'image/jpeg', fileSize: 8 * 1024 * 1024 + 1 },
+  ] });
+  await press(ui, 'Add photos');
+  assert.ok(hasText(ui, '2/5'));
+  assert.ok(hasText(ui, 'Photos larger than 8 MB were skipped.'));
+  await press(ui, 'Photo 2, make primary');
+  assert.equal(control(ui, 'Primary photo').children[0].props.source.uri, 'file:///second.jpg');
+  h.reply(`/api/v1/listings/${listing.id}/photos`, 422, { fieldErrors: { photos: 'Photo is corrupt.' } });
+  await press(ui, 'Upload photos');
+  assert.ok(hasText(ui, 'Photo is corrupt.'));
+  assert.ok(hasText(ui, '2/5'));
+  assert.equal(completed, undefined);
+  const updated = { ...listing, photoURLs: ['/uploads/cover.jpg', '/uploads/second.png'] };
+  h.reply(`/api/v1/listings/${listing.id}/photos`, 200, updated);
+  await press(ui, 'Upload photos');
+  assert.equal(completed.photoURLs[0], updated.photoURLs[0]);
+  const uploads = h.requests.filter(request => request.url.endsWith('/photos'));
+  assert.equal(uploads.length, 2);
+  for (const request of uploads) {
+    assert.equal(request.method, 'POST');
+    assert.equal(request.headers.get('Authorization'), `Bearer ${token}`);
+    assert.equal(request.headers.has('Content-Type'), false, 'Native fetch must set the multipart boundary');
+    assert.equal(request.body.parts.map(part => part.name).join(','), 'photos[],photos[]');
+    assert.equal(request.body.parts.map(part => part.value.uri).join(','), 'file:///second.jpg,file:///first.png');
+  }
+});
+
+test('photo uploads disable changes while pending and recover from an expired session', async t => {
+  const h = harness();
+  let expired = 0;
+  let completed = 0;
+  const ui = await mount(t, h.AddPhotos, { listingId: listing.id, token, onDone: () => completed++, onBack() {}, onSessionExpired: () => expired++ });
+  h.pick({ canceled: false, assets: [{ uri: 'file:///cover.png', mimeType: 'image/png', fileSize: 100 }] });
+  await press(ui, 'Add photos');
+  const finish = h.defer(`/api/v1/listings/${listing.id}/photos`);
+  await press(ui, 'Upload photos');
+  for (const label of ['Back to my listings', 'Add photos', 'Remove photo 1', 'Primary photo']) {
+    assert.equal(control(ui, label).props.disabled, true);
+  }
+  await act(async () => { finish(401, { reason: 'Authentication required.' }); });
+  assert.equal(expired, 1);
+  assert.equal(completed, 0);
+});
+
+test('owned listing requests use bearer authentication and relative photo URLs use the shared API host', async () => {
+  const h = harness();
+  h.reply('/api/v1/me/listings', 200, [{ status: 'active', listing }]);
+  const owned = await h.api.myListings(token, new AbortController().signal);
+  assert.equal(owned[0].listing.id, listing.id);
+  assert.equal(h.requests[0].headers.get('Authorization'), `Bearer ${token}`);
+  assert.equal(h.api.photoURL('/uploads/image.jpg'), 'http://marketplace.test:8080/uploads/image.jpg');
+  assert.equal(h.api.photoURL('https://images.example/image.jpg'), 'https://images.example/image.jpg');
+});
+
+test('signed-in users can create an item, upload its photo, and open refreshed public details', async t => {
+  const h = harness(token);
+  h.reply('me', 200, user);
+  const ui = await mount(t, h.App);
+  h.reply('/api/v1/me/listings', 200, []);
+  await press(ui, 'My listings');
+  assert.ok(hasText(ui, 'You have no listings yet.'));
+  await press(ui, 'Create listing');
+  await fill(ui, 'Title', listing.title);
+  await fill(ui, 'Description', listing.description);
+  await fill(ui, 'Price in dollars', '25.00');
+  await fill(ui, 'Category', listing.category);
+  h.reply('/api/v1/listings', 201, listing);
+  await press(ui, 'Publish and add photos');
+  const publish = h.requests.find(request => request.method === 'POST' && request.url.endsWith('/listings'));
+  assert.equal(publish.headers.get('Authorization'), `Bearer ${token}`);
+  assert.equal(JSON.parse(publish.body).priceCents, 2500);
+  assert.equal(JSON.parse(publish.body).ownerID, undefined);
+  h.pick({ canceled: false, assets: [{ uri: 'file:///cover.png', mimeType: 'image/png', fileSize: 100 }] });
+  await press(ui, 'Add photos');
+  const updated = { ...listing, photoURLs: ['/uploads/listings/desk-1/version/0.png'] };
+  h.reply(`/api/v1/listings/${listing.id}/photos`, 200, updated);
+  h.reply(`/api/v1/listings/${listing.id}`, 200, updated);
+  await press(ui, 'Upload photos');
+  assert.ok(hasText(ui, listing.description));
+  assert.ok(ui.container.queryAll(node => node.type === 'Image').some(node =>
+    node.props.source.uri === `http://marketplace.test:8080${updated.photoURLs[0]}`));
+});
+
+test('My listings restricts photo actions to active items and offers login after session expiry', async t => {
+  const h = harness(token);
+  h.reply('me', 200, user);
+  const ui = await mount(t, h.App);
+  h.reply('/api/v1/me/listings', 200, [
+    { status: 'active', listing },
+    { status: 'sold', listing: { ...listing, id: 'sold-1', title: 'Sold lamp' } },
+  ]);
+  await press(ui, 'My listings');
+  assert.ok(control(ui, `Add or replace photos for ${listing.title}`));
+  assert.equal(ui.container.queryAll(node => node.type === 'Button' && node.props.title === 'Add or replace photos for Sold lamp').length, 0);
+  await press(ui, 'Back to marketplace');
+  h.reply('/api/v1/me/listings', 401, { reason: 'Authentication required.' });
+  await press(ui, 'My listings');
+  await press(ui, 'Log in again');
+  assert.ok(control(ui, 'Log in'));
 });

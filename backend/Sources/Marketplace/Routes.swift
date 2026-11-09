@@ -11,6 +11,10 @@ struct AuthenticatedUser: Authenticatable, Sendable {
 }
 
 func configureRoutes(_ app: Application, catalog: Catalog = Catalog()) {
+    // Uploaded versions are immutable; replacing a set changes the listing's URLs.
+    app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
+    let photoStorage = PhotoStorage(publicDirectory: app.directory.publicDirectory)
+
     app.get("health") { _ in ["status": "ok"] }
     let listings = app.grouped("api", "v1", "listings")
     listings.get { req -> [Listing] in
@@ -49,6 +53,41 @@ func configureRoutes(_ app: Application, catalog: Catalog = Catalog()) {
             return response
         }
     }
+
+    // Upload photos for a listing the caller owns (multipart, field `photos[]`).
+    // Replaces the whole set; the first file is the primary photo.
+    listings.grouped(SessionAuthenticator(), AuthenticatedUser.guardMiddleware())
+        .on(.POST, ":id", "photos", body: .collect(maxSize: "45mb")) { req async throws -> Response in
+            let user = try req.auth.require(AuthenticatedUser.self)
+            guard user.verified else {
+                throw Abort(.forbidden, reason: "Verify your KU email before publishing.")
+            }
+            guard let id = req.parameters.get("id"),
+                  catalog.owned(by: user.id).contains(where: { $0.listing.id == id && $0.status == .active }) else {
+                throw Abort(.notFound, reason: "This listing is unavailable.")
+            }
+            do {
+                let body: PhotoUploadBody
+                do {
+                    body = try req.content.decode(PhotoUploadBody.self)
+                } catch let failure as AbortError {
+                    throw failure
+                } catch {
+                    throw Abort(.badRequest, reason: "The photo upload body is malformed.")
+                }
+                let upload = try await req.application.threadPool.runIfActive(eventLoop: req.eventLoop) {
+                    try PhotoUpload(body)
+                }.get()
+                let listing = try await photoStorage.replace(listingID: id, ownerID: user.id, with: upload, catalog: catalog, on: req)
+                let response = Response(status: .ok)
+                try response.content.encode(listing)
+                return response
+            } catch let failure as ListingFieldErrors {
+                let response = Response(status: .unprocessableEntity)
+                try response.content.encode(FieldErrorBody(message: "Check the highlighted fields.", fieldErrors: failure.fields))
+                return response
+            }
+        }
 
     let mine = app.grouped("api", "v1", "me", "listings")
         .grouped(SessionAuthenticator(), AuthenticatedUser.guardMiddleware())
