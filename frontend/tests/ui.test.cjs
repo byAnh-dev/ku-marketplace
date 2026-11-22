@@ -887,3 +887,56 @@ test('an unverified student can resend; duplicate requests and navigation are bl
   assert.equal(loggedIn, false);
   assert.equal(h.storage.size, 0);
 });
+
+test('marketplace filters combine with the keyword, reject a bad range, and clear without losing it', async t => {
+  const h = harness();
+  const ui = await mount(t, h.App);
+  assert.ok(hasText(ui, 'Study desk'));
+
+  await fill(ui, 'Search listings', 'desk');
+  await press(ui, 'Filters');
+  await press(ui, 'Textbooks');
+  await press(ui, 'Good');
+  await fill(ui, 'Minimum price', '10');
+  await fill(ui, 'Maximum price', '20');
+  await press(ui, 'Apply filters');
+
+  const filtered = h.requests.at(-1);
+  assert.match(filtered.url, /[?&]q=desk/);
+  assert.match(filtered.url, /category=Textbooks/);
+  assert.match(filtered.url, /condition=Good/);
+  assert.match(filtered.url, /minPriceCents=1000/);
+  assert.match(filtered.url, /maxPriceCents=2000/);
+  assert.ok(hasText(ui, '4 applied'));
+
+  // An inverted range is refused locally, before any request leaves the app.
+  const sent = h.requests.length;
+  await press(ui, 'Filters');
+  await fill(ui, 'Minimum price', '30');
+  await press(ui, 'Apply filters');
+  assert.equal(h.requests.length, sent);
+  assert.ok(hasText(ui, 'Minimum price must not be greater than the maximum.'));
+
+  // A price that is not a number is refused the same way.
+  await fill(ui, 'Minimum price', 'ten');
+  await press(ui, 'Apply filters');
+  assert.equal(h.requests.length, sent);
+  assert.ok(hasText(ui, 'Enter prices like 10 or 10.50.'));
+
+  // Clearing filters keeps the keyword and drops every filter parameter.
+  await fill(ui, 'Minimum price', '10');
+  await press(ui, 'Apply filters');
+  await press(ui, 'Clear filters');
+  const cleared = h.requests.at(-1);
+  assert.match(cleared.url, /[?&]q=desk/);
+  assert.doesNotMatch(cleared.url, /category=|condition=|minPriceCents=|maxPriceCents=/);
+  assert.equal(inputValue(ui, 'Search listings'), 'desk');
+  assert.ok(!hasText(ui, '4 applied'));
+
+  // Reopening the panel after clearing shows empty fields, and a new filter still applies.
+  await press(ui, 'Filters');
+  assert.equal(inputValue(ui, 'Minimum price'), '');
+  await press(ui, 'Dorm & Living');
+  await press(ui, 'Apply filters');
+  assert.match(h.requests.at(-1).url, /category=Dorm%20%26%20Living/);
+});
