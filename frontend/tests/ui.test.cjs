@@ -26,8 +26,12 @@ function harness(storedToken, clock) {
   const requests = [];
   const replies = new Map();
   const pickerResults = [];
+  const appStateListeners = new Set();
   const native = {
-    AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) },
+    AppState: { currentState: 'active', addEventListener: (_, listener) => {
+      appStateListeners.add(listener);
+      return { remove: () => appStateListeners.delete(listener) };
+    } },
     Platform: { OS: 'ios' }, StyleSheet: { create: value => value },
     ...Object.fromEntries(['ActivityIndicator', 'Button', 'Image', 'Pressable',
       'SafeAreaView', 'KeyboardAvoidingView', 'ScrollView', 'Text', 'TextInput', 'View'].map(name => [name, name])),
@@ -113,6 +117,10 @@ function harness(storedToken, clock) {
     PhotoPicker: load(path.resolve(__dirname, '../src/PhotoPicker.tsx')).PhotoPicker,
     api: load(path.resolve(__dirname, '../src/api.ts')),
     storage, requests,
+    changeAppState(state) {
+      native.AppState.currentState = state;
+      for (const listener of appStateListeners) listener(state);
+    },
     pick: result => pickerResults.push(result),
     reply: (route, status, body) => queue(route, response(status, body)),
     offline: route => queue(route, new Error('Network unavailable')),
@@ -272,6 +280,42 @@ test('Message seller reopens the buyer history and never selects a seller-owned 
   await press(ui, 'Message seller');
   assert.ok(hasText(ui, 'The desk is still available.'));
   assert.equal(h.requests.filter(r => r.method === 'POST').length, 0);
+});
+
+test('a pending read preserves rapidly scrolled messages, retries failures and skips background-only rows', async t => {
+  const h = harness(token);
+  h.reply('me', 200, user);
+  const ui = await mount(t, h.App);
+  const thread = { id: 'existing', listingId: listing.id, listingTitle: 'Study desk', peerDisplayName: 'Peer',
+    listingStatus: 'active', canMessage: true, blockedByMe: false, isBuyer: true };
+  const messages = Array.from({ length: 104 }, (_, i) => ({ sequence: i + 1, senderId: 'peer', recipientId: user.id,
+    senderDisplayName: 'Peer', body: String(i + 1), createdAt: '2026-11-22T10:00:00Z' }));
+  const route = '/api/v1/conversations/existing/messages';
+  const page = { ...thread, hasOlder: false, hasNewer: false };
+  const read = '/api/v1/conversations/existing/read';
+  const batches = () => h.requests.filter(r => r.url.endsWith(read)).map(r => JSON.parse(r.body).sequences);
+  h.reply('/api/v1/conversations', 200, [thread]);
+  await press(ui, 'Messages');
+  h.reply(route, 200, { ...page, items: messages });
+  await press(ui, 'Study deskPeer');
+  const view = items => ui.container.queryAll(n => n.type === 'FlatList')[0].props
+    .onViewableItemsChanged({ viewableItems: items.map(item => ({ item, isViewable: true })) });
+  const finishFirst = h.defer(read);
+  await act(async () => view(messages.slice(0, 1)));
+  await act(async () => { view(messages.slice(1, 102)); view([]); });
+  assert.deepEqual(batches(), [[1]]);
+  h.offline(read);
+  h.reply(route, 200, { ...page, items: [] });
+  await act(async () => finishFirst(204));
+  const nextHundred = messages.slice(1, 101).map(row => row.sequence);
+  assert.deepEqual(batches(), [[1], nextHundred]);
+  await act(async () => h.changeAppState('background'));
+  await act(async () => { view(messages.slice(102, 103)); view(messages.slice(103)); });
+  assert.equal(batches().length, 2);
+  h.reply(read, 204); h.reply(read, 204);
+  for (let i = 0; i < 3; i++) h.reply(route, 200, { ...page, items: [] });
+  await act(async () => h.changeAppState('active'));
+  assert.deepEqual(batches(), [[1], nextHundred, nextHundred, [102, 104]]);
 });
 
 test('registration validates KU email, matching passwords, and UTF-8 bytes before showing verification instructions', async t => {

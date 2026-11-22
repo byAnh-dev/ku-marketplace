@@ -100,6 +100,7 @@ export function ThreadScreen({ screen, session, poll, back, onExpired }: Omit<Sh
   const lastFetched = useRef<number | undefined>(undefined);
   const policyGeneration = useRef(0);
   const visibleIncoming = useRef(new Set<number>());
+  const pendingReads = useRef(new Set<number>());
   const acknowledged = useRef(new Set<number>());
   const reading = useRef(false);
   const [viewRevision, setViewRevision] = useState(0);
@@ -152,21 +153,39 @@ export function ThreadScreen({ screen, session, poll, back, onExpired }: Omit<Sh
   }
 
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50 }).current;
+  const queueVisible = useCallback(() => {
+    for (const sequence of visibleIncoming.current) {
+      if (!acknowledged.current.has(sequence)) pendingReads.current.add(sequence);
+    }
+  }, []);
   const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: ReadonlyArray<{ isViewable: boolean; item: Message }> }) => {
     visibleIncoming.current = new Set(viewableItems.filter(row => row.isViewable && row.item.recipientId.toLowerCase() === userId)
       .map(row => row.item.sequence));
-    setViewRevision(n => n + 1);
-  }, [userId]);
+    if (mounted.current && AppState.currentState === 'active') {
+      // Capture this event before React batches another scroll update.
+      queueVisible();
+      setViewRevision(n => n + 1);
+    }
+  }, [userId, queueVisible]);
   useEffect(() => {
-    if (!id || !poll.active || AppState.currentState !== 'active' || reading.current) return;
-    const sequences = [...visibleIncoming.current].filter(sequence => !acknowledged.current.has(sequence)).slice(0, 100);
+    if (!id || !poll.active || AppState.currentState !== 'active') return;
+    queueVisible(); // Include rows still on screen when returning from the background.
+    if (reading.current) return;
+    const sequences = [...pendingReads.current].slice(0, 100);
     if (!sequences.length) return;
     reading.current = true;
     markDisplayed(session.token, id, sequences).then(() => {
-      sequences.forEach(sequence => acknowledged.current.add(sequence));
+      for (const sequence of sequences) {
+        acknowledged.current.add(sequence);
+        pendingReads.current.delete(sequence);
+      }
+      reading.current = false;
       if (mounted.current) poll.refresh();
-    }).catch(cause => failed(cause, setHistoryError)).finally(() => { reading.current = false; });
-  }, [id, poll.active, poll.tick, poll.refresh, session.token, viewRevision, failed]);
+    }).catch(cause => {
+      reading.current = false;
+      failed(cause, setHistoryError);
+    });
+  }, [id, poll.active, poll.tick, poll.refresh, session.token, viewRevision, failed, queueVisible]);
 
   async function send() {
     if (inFlight.current || !state.canMessage || !draft.trim()) return;
