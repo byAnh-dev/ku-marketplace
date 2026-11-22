@@ -1,5 +1,6 @@
 import { ActivityIndicator, KeyboardAvoidingView, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_600SemiBold, PlusJakartaSans_700Bold, PlusJakartaSans_800ExtraBold } from '@expo-google-fonts/plus-jakarta-sans';
+import { listingCategories as categories, listingConditions as conditions } from './listingChoices';
 
 // Adapted from Figma 1:816, 1:878–1:953 and 1:1045–1:1057.
 // This is presentation only; MyListings owns validation, requests and revisions.
@@ -10,12 +11,6 @@ type Props = {
   busy: boolean; needsReload: boolean; error: string; fields: Record<string, string>;
   onBack: () => void; onReload?: () => void; onSave: () => void;
 };
-
-const categories = [
-  ['📚', 'Textbooks'], ['💻', 'Electronics'], ['🛋️', 'Dorm & Living'],
-  ['🏀', 'Apparel / Game Day'], ['🎟️', 'Tickets'],
-];
-const conditions = ['New', 'Like new', 'Good', 'Fair', 'Poor'];
 
 export function EditListingForm(p: Props) {
   const [fontsLoaded] = useFonts({ PlusJakartaSans_400Regular, PlusJakartaSans_500Medium,

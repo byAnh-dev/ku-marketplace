@@ -8,6 +8,9 @@ export type Listing = {
   category: string; sellerDisplayName: string; pickupArea: string; photoURLs: string[];
 };
 export type ListingPage = { items: Listing[]; page: number; per: number; hasMore: boolean };
+export type ListingFilters = {
+  category?: string; condition?: string; minPriceCents?: number; maxPriceCents?: number;
+};
 
 export type OwnedListing = { status: 'active' | 'sold' | 'reserved' | 'deleted'; listing: Listing; revision: string };
 export type CreateListingBody = {
@@ -28,8 +31,13 @@ async function get<T>(path: string, signal: AbortSignal): Promise<{ value: T; he
   return { value: await response.json(), headers: response.headers };
 }
 
-export async function search(q: string, page: number, signal: AbortSignal): Promise<ListingPage> {
-  const result = await get<Listing[]>(`?q=${encodeURIComponent(q)}&page=${page}&per=20`, signal);
+export async function search(q: string, page: number, filters: ListingFilters, signal: AbortSignal): Promise<ListingPage> {
+  const params = [`q=${encodeURIComponent(q)}`, `page=${page}`, 'per=20'];
+  if (filters.category) params.push(`category=${encodeURIComponent(filters.category)}`);
+  if (filters.condition) params.push(`condition=${encodeURIComponent(filters.condition)}`);
+  if (filters.minPriceCents !== undefined) params.push(`minPriceCents=${filters.minPriceCents}`);
+  if (filters.maxPriceCents !== undefined) params.push(`maxPriceCents=${filters.maxPriceCents}`);
+  const result = await get<Listing[]>(`?${params.join('&')}`, signal);
   const header = (name: string, fallback: string) => result.headers.get(name) || fallback;
   return { items: result.value, page: Number(header('X-Page', String(page))), per: Number(header('X-Page-Size', '20')),
     hasMore: header('X-Has-More', 'false') === 'true' };
