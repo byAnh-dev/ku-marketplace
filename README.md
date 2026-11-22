@@ -21,6 +21,12 @@ the provider configuration in [backend/README.md](backend/README.md). For local
 fictional accounts, enable `DEV_EMAIL_VERIFICATION=true` on the backend and use
 the link from its logs.
 
+If the verification email is missing or its link has expired, enter your KU
+email on the login screen and choose **Resend verification email**. Wait 60
+seconds between attempts, including after registration. A successful resend
+replaces older links with a new 30-minute link for the same account. Failed
+delivery keeps the previous link usable until it expires.
+
 The app stores only the session token in Expo SecureStore and checks it with
 `GET /api/v1/auth/me` when it starts. Expired or revoked sessions return to the
 login option. Temporary connection failures keep the token and show **Retry

@@ -21,7 +21,7 @@ const listing = {
 
 // React, application components, effects, and the API modules execute unchanged.
 // These hosts expose props and events but do not simulate native layout or touch.
-function harness(storedToken) {
+function harness(storedToken, clock) {
   const storage = new Map(storedToken ? [[sessionKey, storedToken]] : []);
   const requests = [];
   const replies = new Map();
@@ -56,7 +56,8 @@ function harness(storedToken) {
       },
     },
     globals: {
-      // React Native accepts local file objects; Node's FormData only accepts Blobs.
+      ...(clock ? { Date: class extends Date { static now() { return clock.now; } },
+        setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout } : {}),
       FormData: class {
         parts = [];
         append(name, value) { this.parts.push({ name, value }); }
@@ -133,6 +134,23 @@ async function mount(t, Component, props = {}) {
   return ui;
 }
 
+function manualClock() {
+  let nextID = 0;
+  const timers = new Map();
+  const clock = {
+    now: Date.now(),
+    setTimeout(callback, delay) { const id = ++nextID; timers.set(id, { at: clock.now + delay, callback }); return id; },
+    clearTimeout(id) { timers.delete(id); },
+    advance(milliseconds) {
+      clock.now += milliseconds;
+      for (const [id, timer] of [...timers]) {
+        if (timer.at <= clock.now) { timers.delete(id); timer.callback(); }
+      }
+    },
+  };
+  return clock;
+}
+
 test('public browsing stays available and login/logout preserve the marketplace search', async t => {
   const h = harness();
   const ui = await mount(t, h.App);
@@ -192,6 +210,7 @@ test('registration validates KU email, matching passwords, and UTF-8 bytes befor
   assert.equal(inputValue(ui, 'KU email'), user.email);
   assert.equal(loggedIn, false);
   assert.equal(h.storage.size, 0);
+  assert.equal(control(ui, 'Resend verification email').props.disabled, true);
 });
 
 test('an unverified login stays on the form and displays the backend explanation', async t => {
@@ -385,4 +404,56 @@ test('My listings restricts photo actions to active items and offers login after
   await press(ui, 'My listings');
   await press(ui, 'Log in again');
   assert.ok(control(ui, 'Log in'));
+});
+
+test('resend verification validates email and counts down the server cooldown for each address', async t => {
+  const clock = manualClock();
+  const h = harness(undefined, clock);
+  const ui = await mount(t, h.AuthScreen, { onLogin() {}, onBack() {} });
+  await fill(ui, 'KU email', 'student@example.com');
+  await press(ui, 'Resend verification email');
+  assert.ok(hasText(ui, 'Use your @ku.edu email address.'));
+  assert.equal(h.requests.length, 0);
+  await fill(ui, 'KU email', ' Student@KU.edu ');
+  h.reply('resend-verification', 200, { message: 'Check your KU email.', retryAfterSeconds: 60 });
+  await press(ui, 'Resend verification email');
+  assert.equal(control(ui, 'Resend verification email').props.disabled, true);
+  assert.deepEqual(JSON.parse(h.requests[0].body), { email: user.email });
+  assert.ok(hasText(ui, '60 seconds'));
+  await act(async () => { clock.advance(59000); });
+  assert.ok(hasText(ui, '1 seconds'));
+  await act(async () => { clock.advance(1000); });
+  assert.equal(control(ui, 'Resend verification email').props.disabled, false);
+  h.reply('resend-verification', 429, { reason: 'Please wait before requesting another verification email.', retryAfterSeconds: 37 });
+  await press(ui, 'Resend verification email');
+  assert.ok(hasText(ui, 'Please wait before requesting another verification email.'));
+  assert.ok(hasText(ui, '37 seconds'));
+  await fill(ui, 'KU email', 'another@ku.edu');
+  assert.equal(control(ui, 'Resend verification email').props.disabled, false);
+  await fill(ui, 'KU email', 'STUDENT@KU.EDU');
+  assert.equal(control(ui, 'Resend verification email').props.disabled, true);
+  assert.equal(h.storage.size, 0);
+});
+
+test('an unverified student can resend; duplicate requests and navigation are blocked while delivery is pending', async t => {
+  const h = harness();
+  let loggedIn = false;
+  const ui = await mount(t, h.AuthScreen, { onLogin() { loggedIn = true; }, onBack() {} });
+  await fill(ui, 'KU email', user.email);
+  await fill(ui, 'Password', 'long-password');
+  h.reply('login', 403, { reason: 'Verify your KU email before logging in.' });
+  await press(ui, 'Log in');
+  const finish = h.defer('resend-verification');
+  const resend = control(ui, 'Resend verification email');
+  await act(async () => { resend.props.onPress(); resend.props.onPress(); });
+  assert.equal(h.requests.filter(request => request.url.endsWith('/resend-verification')).length, 1);
+  for (const label of ['Resend verification email', 'Back to marketplace', 'New here? Create an account']) {
+    assert.equal(control(ui, label).props.disabled, true);
+  }
+  assert.ok(ui.container.queryAll(node => node.type === 'TextInput').every(node => node.props.editable === false));
+  await act(async () => { finish(503, { reason: 'Verification email could not be delivered.' }); });
+  assert.ok(hasText(ui, 'Verification email could not be delivered.'));
+  assert.equal(control(ui, 'Resend verification email').props.disabled, false);
+  assert.equal(loggedIn, false);
+  assert.equal(h.storage.size, 0);
 });

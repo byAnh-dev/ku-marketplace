@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { login, register, Session } from './auth';
+import { login, register, resendVerification, Session } from './auth';
 
 function passwordBytes(password: string): number {
   let bytes = 0;
@@ -20,9 +20,39 @@ export function AuthScreen({ onLogin, onBack }: { onLogin: (session: Session) =>
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [cooldowns, setCooldowns] = useState<Record<string, number>>({});
+  const [clock, setClock] = useState(Date.now);
+  const inFlight = useRef(false);
+  const normalizedEmail = email.trim().toLowerCase();
+  const retryAt = cooldowns[normalizedEmail] ?? 0;
+  const remaining = Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
+
+  useEffect(() => {
+    const delay = retryAt - Date.now();
+    if (delay <= 0) return;
+    const timer = setTimeout(() => setClock(Date.now()), Math.min(1000, delay));
+    return () => clearTimeout(timer);
+  }, [retryAt, clock]);
+
+  function startCooldown(seconds: number) {
+    setCooldowns(previous => ({ ...previous, [normalizedEmail]: Date.now() + seconds * 1000 }));
+  }
+
+  async function resend() {
+    if (inFlight.current || retryAt > Date.now()) return;
+    setError(''); setNotice('');
+    if (!/^[^@\s]+@ku\.edu$/i.test(email.trim())) { setError('Use your @ku.edu email address.'); return; }
+    inFlight.current = true; setBusy(true);
+    try {
+      const result = await resendVerification(normalizedEmail);
+      setNotice(result.message);
+      startCooldown(result.retryAfterSeconds);
+    } catch (err) { setError(err instanceof Error ? err.message : 'Could not resend the verification email.'); }
+    finally { inFlight.current = false; setBusy(false); }
+  }
 
   async function submit() {
-    if (busy) return;
+    if (inFlight.current) return;
     setError(''); setNotice('');
     if (!/^[^@\s]+@ku\.edu$/i.test(email.trim())) { setError('Use your @ku.edu email address.'); return; }
     if (mode === 'register') {
@@ -33,17 +63,18 @@ export function AuthScreen({ onLogin, onBack }: { onLogin: (session: Session) =>
       }
       if (password !== confirmation) { setError('Passwords do not match.'); return; }
     }
-    setBusy(true);
+    inFlight.current = true; setBusy(true);
     try {
       if (mode === 'register') {
         const result = await register(displayName.trim(), email.trim(), password, confirmation);
         setNotice(result);
+        startCooldown(60);
         setMode('login'); setPassword(''); setConfirmation('');
       } else {
         onLogin(await login(email.trim(), password));
       }
     } catch (err) { setError(err instanceof Error ? err.message : 'Unable to authenticate.'); }
-    finally { setBusy(false); }
+    finally { inFlight.current = false; setBusy(false); }
   }
 
   return <ScrollView contentContainerStyle={styles.page} keyboardShouldPersistTaps="handled">
@@ -52,12 +83,19 @@ export function AuthScreen({ onLogin, onBack }: { onLogin: (session: Session) =>
     <Text style={styles.body}>A verified @ku.edu address is required to sell and manage listings.</Text>
     {mode === 'register' && <Text style={styles.body}>After registering, open the link in your KU email within 30 minutes. Then return here to log in.</Text>}
     {mode === 'register' && <TextInput editable={!busy} style={styles.input} placeholder="Display name" accessibilityLabel="Display name" autoCapitalize="words" value={displayName} onChangeText={setDisplayName} />}
-    <TextInput editable={!busy} style={styles.input} placeholder="KU email" accessibilityLabel="KU email" autoCapitalize="none" autoCorrect={false} keyboardType="email-address" value={email} onChangeText={setEmail} />
+    <TextInput editable={!busy} style={styles.input} placeholder="KU email" accessibilityLabel="KU email" autoCapitalize="none" autoCorrect={false} keyboardType="email-address" value={email}
+      onChangeText={value => { setEmail(value); setError(''); setNotice(''); }} />
     <TextInput editable={!busy} style={styles.input} placeholder="Password" accessibilityLabel="Password" secureTextEntry autoCorrect={false} autoCapitalize="none" value={password} onChangeText={setPassword} />
     {mode === 'register' && <TextInput editable={!busy} style={styles.input} placeholder="Confirm password" accessibilityLabel="Confirm password" secureTextEntry autoCorrect={false} autoCapitalize="none" value={confirmation} onChangeText={setConfirmation} />}
     {!!error && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
     {!!notice && <Text style={styles.notice}>{notice}</Text>}
     {busy ? <ActivityIndicator accessibilityLabel="Submitting account request" /> : <Pressable style={styles.action} accessibilityRole="button" onPress={submit}><Text style={styles.actionText}>{mode === 'login' ? 'Log in' : 'Register'}</Text></Pressable>}
+    {mode === 'login' && <View>
+      <Pressable accessibilityRole="button" disabled={busy || remaining > 0} onPress={resend}>
+        <Text style={styles.link}>Resend verification email</Text>
+      </Pressable>
+      {remaining > 0 && <Text style={styles.body}>You can request another link in {remaining} seconds.</Text>}
+    </View>}
     <Pressable accessibilityRole="button" disabled={busy} onPress={() => { setMode(mode === 'login' ? 'register' : 'login'); setPassword(''); setConfirmation(''); setError(''); setNotice(''); }}>
       <Text style={styles.link}>{mode === 'login' ? 'New here? Create an account' : 'Already registered? Log in'}</Text>
     </Pressable>

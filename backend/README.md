@@ -122,10 +122,29 @@ credentials and listings across container restarts. Most tests use a separate
 in-memory SQLite database; persistence tests reopen a temporary database file.
 
 The account API provides `POST /api/v1/auth/register`, `GET /api/v1/auth/verify`,
-`POST /api/v1/auth/login`, `GET /api/v1/auth/me`, and `POST /api/v1/auth/logout`.
+`POST /api/v1/auth/resend-verification`, `POST /api/v1/auth/login`,
+`GET /api/v1/auth/me`, and `POST /api/v1/auth/logout`.
 Registration requires an exact `ku.edu` email address and a matching password
 of 12–72 UTF-8 bytes. Email verification links expire after 30 minutes. Login
 requires a verified account and returns a session token valid for seven days.
+
+Resend takes `{ "email": "student@ku.edu" }` without a session or password.
+An accepted request returns `200` with a generic `message` and
+`retryAfterSeconds: 60`; unknown and already verified accounts receive the
+same response without sending mail. Invalid KU addresses return `400`.
+An unverified account may request one link per 60 seconds, including the
+initial registration and failed delivery attempts. An early retry returns
+`429`, a `Retry-After` header and `{ "reason": "...", "retryAfterSeconds": N }`.
+
+The cooldown lives in SQLite and survives backend restarts. A pending credential
+reserves the attempt before contacting the email provider. Its fixed 30-minute
+expiry also records the issue time, so no schema change is needed. Pending
+links cannot verify an account. Provider delivery has a 10-second timeout and
+runs outside the database transaction. Successful delivery activates the new
+link and invalidates older verification links atomically; a failed delivery
+returns `503` and preserves the previous usable link. Resend keeps the account
+UUID, password and sessions unchanged. Verification consumes the link and
+marks the account verified in one transaction.
 
 Send `Authorization: Bearer <session token>` to publish, upload photos or read My Listings.
 `SessionAuthenticator` runs before the listing guards. It uses `currentSession`
@@ -179,6 +198,10 @@ multipart encoder; verify library permissions and upload on a device as well.
 details, ordering, saved sessions, ownership, ordered photo links and public
 image bytes. It also checks upgrades from the account-only schema and safe
 recovery when the listing migration has completed before its history is saved.
+
+`VerificationTests` uses real SQLite and HTTP routes with only email delivery
+substituted. It covers expired-link recovery, old-link invalidation, cooldowns,
+concurrent requests, delivery failure, account preservation and restart recovery.
 
 With the API running, `node tests/api-smoke.mjs` checks the public API and denial
 of unverified credentials. `node tests/auth-smoke.mjs` checks auth error paths.

@@ -199,3 +199,35 @@ test('logout reports failure to remove the token from the keychain', async () =>
   await assert.rejects(h.auth.logout(token));
   assert.equal(h.storage.get(sessionKey), token);
 });
+
+test('resending verification sends only the email and leaves the saved session unchanged', async () => {
+  const h = harness({ storedToken: token });
+  const message = 'If this account needs verification, a new link has been sent. Check your KU email.';
+  h.reply(200, { message, retryAfterSeconds: 60 });
+  const result = await h.auth.resendVerification(user.email);
+  expectRequest(h.requests[0], 'POST', 'resend-verification');
+  assert.deepEqual(JSON.parse(h.requests[0].body), { email: user.email });
+  assert.equal(result.message, message);
+  assert.equal(result.retryAfterSeconds, 60);
+  assert.equal(h.storage.get(sessionKey), token);
+});
+
+test('resending verification exposes the server cooldown without claiming another email was sent', async () => {
+  const h = harness();
+  h.reply(429, { reason: 'Please wait before requesting another verification email.', retryAfterSeconds: 37 });
+  const result = await h.auth.resendVerification(user.email);
+  assert.equal(result.retryAfterSeconds, 37);
+  assert.equal(result.message, 'Please wait before requesting another verification email.');
+  assert.equal(h.storage.size, 0);
+});
+
+test('resending verification rejects delivery failures and malformed cooldown responses', async () => {
+  const h = harness();
+  h.reply(503, { reason: 'Verification email could not be delivered.' });
+  await assert.rejects(h.auth.resendVerification(user.email), /could not be delivered/);
+  for (const body of [{ message: 'Sent' }, { message: 'Sent', retryAfterSeconds: -1 }, { message: 'Sent', retryAfterSeconds: '60' }]) {
+    h.reply(200, body);
+    await assert.rejects(h.auth.resendVerification(user.email), /invalid response/);
+  }
+  assert.equal(h.storage.size, 0);
+});
