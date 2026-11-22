@@ -24,11 +24,12 @@ struct Catalog: Sendable {
 
     let database: any Database
 
-    func search(_ query: String) async throws -> [Listing] {
-        let term = query.trimmingCharacters(
-            in: .whitespacesAndNewlines
-        ).lowercased()
-
+    /// One query builder carries the active-only rule, the keyword match and the
+    /// filters, so the paginated feed and the unpaged lookup cannot drift apart.
+    private func matches(
+        _ term: String,
+        _ filters: ListingFilters
+    ) -> QueryBuilder<ListingRecord> {
         var request = ListingRecord.query(on: database)
             .filter(\.$status == Status.active.rawValue)
 
@@ -39,7 +40,31 @@ struct Catalog: Sendable {
             }
         }
 
-        return try await request
+        if let category = filters.category {
+            request = request.filter(\.$category == category)
+        }
+        if let condition = filters.condition {
+            request = request.filter(\.$condition == condition)
+        }
+        if let minimum = filters.minPriceCents {
+            request = request.filter(\.$priceCents >= minimum)
+        }
+        if let maximum = filters.maxPriceCents {
+            request = request.filter(\.$priceCents <= maximum)
+        }
+        return request
+    }
+
+    /// Active listings only, newest first. Filtering and pagination happen in the database.
+    func search(
+        _ query: String,
+        filters: ListingFilters = .none
+    ) async throws -> [Listing] {
+        let term = query.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        ).lowercased()
+
+        return try await matches(term, filters)
             .sort(\.$id, .descending)
             .all()
             .map(\.listing)
@@ -55,7 +80,8 @@ struct Catalog: Sendable {
     func search(
         _ query: String,
         page: Int,
-        per: Int
+        per: Int,
+        filters: ListingFilters = .none
     ) async throws -> SearchPage {
         let term = query.trimmingCharacters(
             in: .whitespacesAndNewlines
@@ -65,17 +91,7 @@ struct Catalog: Sendable {
         let safePer = min(max(per, 1), 50)
         let offset = (safePage - 1) * safePer
 
-        var request = ListingRecord.query(on: database)
-            .filter(\.$status == Status.active.rawValue)
-
-        if !term.isEmpty {
-            request = request.group(.or) { group in
-                group.filter(\.$title ~~ term)
-                    .filter(\.$description ~~ term)
-            }
-        }
-
-        let records = try await request
+        let records = try await matches(term, filters)
             .sort(\.$id, .descending)
             .range(offset..<(offset + safePer + 1))
             .all()
