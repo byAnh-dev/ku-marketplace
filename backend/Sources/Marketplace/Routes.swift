@@ -37,13 +37,31 @@ func configureRoutes(
     // Public browse and pagination.
     listings.get { req async throws -> Response in
         let query = try req.query.decode(SearchQuery.self)
+        let filters: ListingFilters
+        do {
+            filters = try ListingFilters(
+                category: query.category,
+                condition: query.condition,
+                minPriceCents: query.minPriceCents,
+                maxPriceCents: query.maxPriceCents
+            )
+        } catch let failure as ListingFieldErrors {
+            let response = Response(status: .unprocessableEntity)
+            try response.content.encode(
+                FieldErrorBody(
+                    message: "Check the filter values.",
+                    fieldErrors: failure.fields
+                )
+            )
+            return response
+        }
 
         let page = try await catalog.search(
             query.q ?? "",
             page: query.page ?? 1,
-            per: query.per ?? 20
+            per: query.per ?? 20,
+            filters: filters
         )
-
         let response = Response(status: .ok)
 
         response.headers.replaceOrAdd(
@@ -414,6 +432,11 @@ private struct SearchQuery: Decodable {
     let q: String?
     let page: Int?
     let per: Int?
+    // Strings so an invalid price becomes a `422` field error rather than a `400` decode failure.
+    let category: String?
+    let condition: String?
+    let minPriceCents: String?
+    let maxPriceCents: String?
 }
 
 private struct PublishWithPhotosBody: Content {
