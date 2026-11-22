@@ -38,7 +38,7 @@ import VaporTesting
             #expect(try await setUserBlock(true, actor: seller, peer: buyer, on: app.db) == closed)
         }
 
-        try await withApp(configure: configure) { app in
+        try await withApp(configure: configure) { (app: Application) async throws -> Void in
             #expect(try await blockState(actor: seller, peer: buyer, on: app.db) == closed)
             #expect(try await setUserBlock(false, actor: buyer, peer: seller, on: app.db) == peerBlocked)
             #expect(try await setUserBlock(false, actor: buyer, peer: seller, on: app.db) == peerBlocked)
