@@ -86,6 +86,23 @@ private struct PublishBody: Content {
         }
     }
 
+    @Test func ownedLookupTargetsOneListingWithoutChangingVisibilityRules() async throws {
+        let rows = fixture()
+        try await withApp(configure: { app in _ = try await configureApplication(app, seedListings: rows) }) { app in
+            let catalog = Catalog(database: app.db)
+            let active = try await catalog.owned(listingID: "active", by: "alice")
+            let sold = try await catalog.owned(listingID: "sold", by: "alice")
+            let deleted = try await catalog.owned(listingID: "deleted", by: "alice")
+            let foreign = try await catalog.owned(listingID: "active", by: "bob")
+            let missing = try await catalog.owned(listingID: "missing", by: "alice")
+            #expect(active?.status == .active)
+            #expect(sold?.status == .sold)
+            #expect(deleted == nil)
+            #expect(foreign == nil)
+            #expect(missing == nil)
+        }
+    }
+
     @Test func newUserHasEmptyList() async throws {
         try await withApp(configure: { app in
             app.middleware.use(TestUser(id: "new-user"))

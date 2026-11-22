@@ -87,6 +87,8 @@ async function authenticatedRequest<T>(path: string, token: string, body?: strin
 }
 
 export const myListings = (token: string, signal: AbortSignal) => authenticatedRequest<OwnedListing[]>('me/listings', token, undefined, signal);
+export const ownedListing = (id: string, token: string, signal: AbortSignal) =>
+  authenticatedRequest<OwnedListing>(`me/listings/${encodeURIComponent(id)}`, token, undefined, signal);
 
 function photoForm(photos: Blob[]): FormData {
   const form = new FormData();

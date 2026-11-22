@@ -110,7 +110,7 @@ func configureRoutes(_ app: Application, catalog: Catalog) {
     mine.get(":id") { req async throws -> OwnedListing in
         let user = try req.auth.require(AuthenticatedUser.self)
         guard let id = req.parameters.get("id"),
-              let listing = try await catalog.owned(by: user.id).first(where: { $0.listing.id == id }) else {
+              let listing = try await catalog.owned(listingID: id, by: user.id) else {
             throw Abort(.notFound, reason: "This listing is unavailable.")
         }
         return listing

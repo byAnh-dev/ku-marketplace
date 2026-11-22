@@ -5,11 +5,12 @@ import { ApiError, createListing, CreateListingBody, Listing, myListings, OwnedL
 import { AddPhotos, PhotoPicker } from './PhotoPicker';
 
 type Props = {
-  token: string; onBack: () => void; onOpen: (listing: Listing) => void; onSessionExpired: () => void;
+  token: string; onBack: () => void; onOpen: (listing: Listing) => void;
+  onViewOwned: (id: string) => void; onSessionExpired: () => void;
 };
 type LoadState = { phase: 'loading' } | { phase: 'ready'; rows: OwnedListing[] } | { phase: 'error'; message: string; expired: boolean };
 
-export function MyListings({ token, onBack, onOpen, onSessionExpired }: Props) {
+export function MyListings({ token, onBack, onOpen, onViewOwned, onSessionExpired }: Props) {
   const [state, setState] = useState<LoadState>({ phase: 'loading' });
   const [attempt, setAttempt] = useState(0);
   const [creating, setCreating] = useState(false);
@@ -49,12 +50,11 @@ export function MyListings({ token, onBack, onOpen, onSessionExpired }: Props) {
         state.rows.map(({ listing, status }) => <View key={listing.id} style={s.card}>
           <Text style={s.title}>{listing.title}</Text>
           <Text style={s.body}>{status} · ${(listing.priceCents / 100).toFixed(2)}</Text>
-          {!!listing.photoURLs[0] && <Image accessibilityLabel={`Cover photo for ${listing.title}`}
-            source={{ uri: photoThumbnailURL(listing.photoURLs[0]) }} style={s.photo} />}
-          {status === 'active' && <>
-            <Button title={`View ${listing.title}`} onPress={() => onOpen(listing)} />
-            <Button title={`Add or replace photos for ${listing.title}`} onPress={() => setSelected(listing)} />
-          </>}
+          {listing.photoURLs[0] ? <Image accessibilityLabel={`Cover photo for ${listing.title}`}
+            source={{ uri: photoThumbnailURL(listing.photoURLs[0]) }} style={s.photo} /> :
+            <View style={[s.photo, s.placeholder]}><Text style={s.body}>No photo</Text></View>}
+          <Button title={`View ${listing.title}`} onPress={() => onViewOwned(listing.id)} />
+          {status === 'active' && <Button title={`Add or replace photos for ${listing.title}`} onPress={() => setSelected(listing)} />}
         </View>)}
   </ScrollView>;
 }
@@ -147,5 +147,6 @@ const s = StyleSheet.create({
   input: { borderWidth: 1, borderColor: '#9aa7b5', borderRadius: 8, backgroundColor: 'white', padding: 12, color: '#152f52' },
   card: { borderRadius: 12, backgroundColor: 'white', padding: 14, gap: 8 },
   photo: { width: '100%', height: 120, borderRadius: 8 },
+  placeholder: { backgroundColor: '#e7edf0', alignItems: 'center', justifyContent: 'center' },
   conditions: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
 });

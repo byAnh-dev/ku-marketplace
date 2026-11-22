@@ -486,6 +486,28 @@ test('leaving a listing draft with selected photos creates no listing or upload'
   assert.ok(control(ui, 'Create listing'));
 });
 
+test('owner sees a photo placeholder and opens fresh sold details through the private route', async t => {
+  const h = harness(token);
+  h.reply('me', 200, user);
+  const ui = await mount(t, h.App);
+  const sold = { ...listing, id: 'sold-1', title: 'Sold lamp' };
+  const rows = [{ status: 'sold', listing: sold }];
+  h.reply('/api/v1/me/listings', 200, rows);
+  await press(ui, 'My listings');
+  assert.ok(hasText(ui, 'No photo'));
+  const route = '/api/v1/me/listings/sold-1';
+  h.reply(route, 200, { status: 'sold', listing: { ...sold, description: 'Fresh owner-only detail.' } });
+  await press(ui, 'View Sold lamp');
+  const reads = h.requests.filter(request => new URL(request.url).pathname.endsWith('/sold-1'));
+  assert.equal(reads.length, 1);
+  assert.equal(new URL(reads[0].url).pathname, route);
+  assert.equal(reads[0].headers.get('Authorization'), `Bearer ${token}`);
+  assert.ok(hasText(ui, 'Fresh owner-only detail.'));
+  h.reply('/api/v1/me/listings', 200, rows);
+  await press(ui, 'Back to my listings');
+  assert.ok(control(ui, 'View Sold lamp'));
+});
+
 test('My listings restricts photo actions to active items and offers login after session expiry', async t => {
   const h = harness(token);
   h.reply('me', 200, user);

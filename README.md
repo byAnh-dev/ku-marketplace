@@ -41,7 +41,7 @@ make it the cover before selecting **Publish listing**. You can publish with no
 photos. If a selected photo is rejected, the form keeps your draft for correction.
 Later, **Add or replace photos** replaces an active item's entire photo set.
 JPEG, PNG and HEIC are accepted, up to 8 MiB and 20 megapixels each. HEIC becomes
-JPEG for display.
+JPEG for display. Open a sold item from **My listings** to see its owner-only details.
 
 Run `npm test` in `frontend/` for the client protocol and rendered component
 tests. These run the real React components and account client with substituted

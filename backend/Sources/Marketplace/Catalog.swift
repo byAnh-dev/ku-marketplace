@@ -68,12 +68,22 @@ struct Catalog: Sendable {
     func owned(by ownerID: String) async throws -> [OwnedListing] {
         let records = try await ListingRecord.query(on: database).filter(\.$ownerID == ownerID)
             .filter(\.$status != Status.deleted.rawValue).sort(\.$id, .descending).all()
-        return try records.map { record in
-            guard let status = Status(rawValue: record.status) else {
-                throw Abort(.internalServerError, reason: "Stored listing status is invalid.")
-            }
-            return OwnedListing(status: status, listing: record.listing)
+        return try records.map { try ownedListing(from: $0) }
+    }
+
+    /// Returns one non-deleted listing the caller owns.
+    func owned(listingID: String, by ownerID: String) async throws -> OwnedListing? {
+        guard let record = try await ListingRecord.query(on: database)
+            .filter(\.$listingID == listingID).filter(\.$ownerID == ownerID)
+            .filter(\.$status != Status.deleted.rawValue).first() else { return nil }
+        return try ownedListing(from: record)
+    }
+
+    private func ownedListing(from record: ListingRecord) throws -> OwnedListing {
+        guard let status = Status(rawValue: record.status) else {
+            throw Abort(.internalServerError, reason: "Stored listing status is invalid.")
         }
+        return OwnedListing(status: status, listing: record.listing)
     }
 
     /// Only the publish route calls this: after validation, with seller fields

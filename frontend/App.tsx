@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Button, FlatList, Image, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { ApiError, detail, Listing, photoURL, search } from './src/api';
+import { ApiError, detail, Listing, ownedListing, photoURL, search } from './src/api';
 import { AuthScreen } from './src/AuthScreen';
 import { logout, restoreSession, Session } from './src/auth';
 import { MyListings } from './src/MyListings';
@@ -37,18 +37,23 @@ function Photo({ uri }: { uri?: string }) {
     <View style={[s.photo, s.placeholder]}><Text style={s.label}>No photo</Text></View>;
 }
 
-function Details({ id, back }: { id: string; back: () => void }) {
-  const { state, retry } = useResource(id, detail);
+function Details({ id, back, ownerToken }: { id: string; back: () => void; ownerToken?: string }) {
+  const load = useCallback(async (listingId: string, signal: AbortSignal): Promise<{ listing: Listing; status?: string }> => {
+    if (ownerToken) return ownedListing(listingId, ownerToken, signal);
+    return { listing: await detail(listingId, signal) };
+  }, [ownerToken]);
+  const { state, retry } = useResource(id, load);
   return <ScrollView contentContainerStyle={s.page}>
-    <Button title="Back to marketplace" onPress={back} />
+    <Button title={ownerToken ? 'Back to my listings' : 'Back to marketplace'} onPress={back} />
     {state.phase !== 'ready' ? <Feedback state={state} retry={retry} /> : <>
-      <Text style={s.label}>{state.value.category}</Text><Text style={s.heading}>{state.value.title}</Text>
-      <Text style={s.price}>{money(state.value.priceCents)}</Text>
-      {state.value.photoURLs.length ? state.value.photoURLs.map(uri => <Photo key={uri} uri={uri} />) : <Photo />}
-      <Text style={s.body}>{state.value.description}</Text>
-      <Text style={s.body}>Condition: {state.value.condition}</Text>
-      <Text style={s.body}>Seller: {state.value.sellerDisplayName}</Text>
-      <Text style={s.body}>Pickup: {state.value.pickupArea}</Text>
+      <Text style={s.label}>{state.value.listing.category}</Text><Text style={s.heading}>{state.value.listing.title}</Text>
+      <Text style={s.price}>{money(state.value.listing.priceCents)}</Text>
+      {state.value.status && <Text style={s.body}>Status: {state.value.status}</Text>}
+      {state.value.listing.photoURLs.length ? state.value.listing.photoURLs.map(uri => <Photo key={uri} uri={uri} />) : <Photo />}
+      <Text style={s.body}>{state.value.listing.description}</Text>
+      <Text style={s.body}>Condition: {state.value.listing.condition}</Text>
+      <Text style={s.body}>Seller: {state.value.listing.sellerDisplayName}</Text>
+      <Text style={s.body}>Pickup: {state.value.listing.pickupArea}</Text>
       <Text style={s.label}>Buyers and sellers arrange pickup and payment themselves.</Text>
     </>}
   </ScrollView>;
@@ -123,9 +128,9 @@ export default function App() {
   </View> : <Button title="Student login / register" onPress={() => setAuthOpen(true)} />;
   return <SafeAreaView style={s.fill}><StatusBar style="dark" />
     {authOpen ? <AuthScreen onBack={() => setAuthOpen(false)} onLogin={value => { setSession(value); setAuthError(''); setAuthOpen(false); }} /> :
-      myListingsOpen && session ? <MyListings token={session.token} onBack={() => setMyListingsOpen(false)}
+      id ? <Details id={id} back={() => setId(null)} ownerToken={myListingsOpen ? session?.token : undefined} /> :
+      myListingsOpen && session ? <MyListings token={session.token} onBack={() => setMyListingsOpen(false)} onViewOwned={setId}
         onOpen={listing => { setMyListingsOpen(false); setId(listing.id); }} onSessionExpired={sessionExpired} /> :
-      id ? <Details id={id} back={() => setId(null)} /> :
       <Market query={query} setQuery={setQuery} open={setId} account={account} />}
   </SafeAreaView>;
 }
