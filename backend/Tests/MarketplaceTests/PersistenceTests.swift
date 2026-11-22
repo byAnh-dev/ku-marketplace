@@ -311,4 +311,51 @@ import VaporTesting
         }
     }
 
+
+    @Test func soldAndDeletedStatusSurviveRestart() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let database = directory + "marketplace.sqlite"
+        var savedOwner: LoginResponse?
+        var soldID = ""
+        var deletedID = ""
+        try await withApp(configure: { app in
+            try await configureApplication(app, databasePath: database, seedListings: [])
+        }) { app in
+            let seller = try await account(app, email: "status-owner@ku.edu")
+            let stranger = try await account(app, email: "status-stranger@ku.edu")
+            savedOwner = seller
+            let sold = try await publish(app, title: "Sold desk", description: "Completed sale", token: seller.token)
+            let deleted = try await publish(app, title: "Removed chair", description: "Remove this item", token: seller.token)
+            soldID = sold.id; deletedID = deleted.id
+            for (method, path) in [(HTTPMethod.POST, "api/v1/listings/\(sold.id)/sold"), (.DELETE, "api/v1/listings/\(deleted.id)")] {
+                for (token, expected) in [(stranger.token, HTTPStatus.notFound), (seller.token, .ok)] {
+                    let result = try await app.testing().sendRequest(method, path, beforeRequest: { req in
+                        req.headers.bearerAuthorization = .init(token: token)
+                        req.headers.add(name: .ifMatch, value: "initial")
+                    })
+                    #expect(result.status == expected)
+                }
+            }
+        }
+        let owner = try #require(savedOwner)
+        let sold = soldID; let deleted = deletedID
+        try await withApp(configure: { app in
+            try await configureApplication(app, databasePath: database)
+        }) { app in
+            let feed = try await get(app, "api/v1/listings")
+            #expect(try feed.content.decode([Listing].self).isEmpty)
+            let mine = try await get(app, "api/v1/me/listings", token: owner.token)
+            let rows = try mine.content.decode([OwnedListing].self)
+            #expect(rows.count == 1)
+            #expect(rows.first?.listing.id == sold)
+            #expect(rows.first?.status == .sold)
+            for id in [sold, deleted] {
+                #expect(try await get(app, "api/v1/listings/\(id)").status == .notFound)
+                #expect(try await upload(app, id: id, files: [Self.png], token: owner.token).status == .notFound)
+            }
+            #expect(try await get(app, "api/v1/me/listings/\(deleted)", token: owner.token).status == .notFound)
+        }
+    }
+
 }

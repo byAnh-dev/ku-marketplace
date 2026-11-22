@@ -29,7 +29,7 @@ function harness(storedToken) {
   const native = {
     Platform: { OS: 'ios' }, StyleSheet: { create: value => value },
     ...Object.fromEntries(['ActivityIndicator', 'Button', 'Image', 'Pressable',
-      'SafeAreaView', 'ScrollView', 'Text', 'TextInput', 'View'].map(name => [name, name])),
+      'SafeAreaView', 'KeyboardAvoidingView', 'ScrollView', 'Text', 'TextInput', 'View'].map(name => [name, name])),
     FlatList: ({ data, renderItem, ListEmptyComponent }) => React.createElement('FlatList', null,
       data.length ? data.map((item, index) => React.createElement(React.Fragment, { key: item.id }, renderItem({ item, index }))) : ListEmptyComponent),
   };
@@ -46,6 +46,8 @@ function harness(storedToken) {
       react: React, 'react/jsx-runtime': require('react/jsx-runtime'),
       'react-native': native, 'expo-status-bar': { StatusBar: 'StatusBar' },
       'expo-secure-store': secureStore,
+      'expo-image': { Image: 'Image' },
+      '@expo-google-fonts/plus-jakarta-sans': { useFonts: () => [true] },
       'expo-image-picker': {
         launchImageLibraryAsync: async () => {
           assert.ok(pickerResults.length, 'Queue a device picker result first');
@@ -471,5 +473,69 @@ test('inactive reloads prevent editing and session expiry returns to login', asy
   assert.equal(ui.container.queryAll(n => n.type === 'TextInput').length, 0);
   h.reply(`/api/v1/me/listings/${listing.id}`, 401, { reason: 'Authentication required.' });
   await press(ui, 'Reload listing');
+  assert.ok(control(ui, 'Log in'));
+});
+
+
+async function openManagedListings(t) {
+  const h = harness(token);
+  h.reply('me', 200, user);
+  const ui = await mount(t, h.App);
+  h.reply('/api/v1/me/listings', 200, [{ status: 'active', listing, revision: 'initial' }]);
+  await press(ui, 'My listings');
+  return { h, ui };
+}
+
+test('mark sold confirms before sending, disables duplicate requests, and keeps seller history', async t => {
+  const { h, ui } = await openManagedListings(t);
+  await press(ui, `Mark sold ${listing.title}`);
+  assert.equal(h.requests.filter(r => r.url.endsWith('/sold')).length, 0);
+  await press(ui, 'Cancel listing action');
+  await press(ui, `Mark sold ${listing.title}`);
+  const finish = h.defer(`/api/v1/listings/${listing.id}/sold`);
+  await press(ui, 'Confirm mark sold');
+  assert.equal(control(ui, 'Confirm mark sold').props.disabled, true);
+  assert.equal(control(ui, 'Back to marketplace').props.disabled, true);
+  await act(async () => finish(200, { status: 'sold', listing, revision: 'sold-v2' }));
+  assert.ok(hasText(ui, 'Listing marked as sold.'));
+  assert.ok(hasText(ui, listing.title));
+  assert.ok(hasText(ui, 'No longer visible to buyers'));
+  assert.equal(ui.container.queryAll(n => n.props?.accessibilityLabel === `Edit ${listing.title}`).length, 0);
+  const request = h.requests.find(r => r.url.endsWith('/sold'));
+  assert.equal(request.method, 'POST');
+  assert.equal(request.headers.get('If-Match'), 'initial');
+  assert.equal(request.headers.get('Authorization'), `Bearer ${token}`);
+});
+
+test('delete can be canceled, preserves the card on network failure and removes it only after success', async t => {
+  const { h, ui } = await openManagedListings(t);
+  await press(ui, `Delete ${listing.title}`);
+  await press(ui, 'Cancel listing action');
+  assert.equal(h.requests.filter(r => r.method === 'DELETE').length, 0);
+  await press(ui, `Delete ${listing.title}`);
+  h.offline(`/api/v1/listings/${listing.id}`);
+  await press(ui, 'Confirm delete');
+  assert.ok(hasText(ui, 'Could not reach the marketplace'));
+  assert.ok(hasText(ui, listing.title));
+  h.reply(`/api/v1/listings/${listing.id}`, 200, { status: 'deleted', listing, revision: 'deleted-v2' });
+  await press(ui, 'Confirm delete');
+  assert.ok(hasText(ui, 'Listing deleted.'));
+  assert.equal(hasText(ui, listing.title), false);
+  assert.ok(hasText(ui, 'You have no listings yet.'));
+  const request = h.requests.filter(r => r.method === 'DELETE').at(-1);
+  assert.equal(request.headers.get('If-Match'), 'initial');
+});
+
+test('stale status actions require reload and expired sessions return to login', async t => {
+  const { h, ui } = await openManagedListings(t);
+  await press(ui, `Delete ${listing.title}`);
+  h.reply(`/api/v1/listings/${listing.id}`, 409, { reason: 'This listing has changed. Reload your listings before trying again.' });
+  await press(ui, 'Confirm delete');
+  assert.equal(control(ui, 'Confirm delete').props.disabled, true);
+  h.reply('/api/v1/me/listings', 200, [{ status: 'active', listing, revision: 'v2' }]);
+  await press(ui, 'Reload my listings');
+  await press(ui, `Mark sold ${listing.title}`);
+  h.reply(`/api/v1/listings/${listing.id}/sold`, 401, { reason: 'Authentication required.' });
+  await press(ui, 'Confirm mark sold');
   assert.ok(control(ui, 'Log in'));
 });

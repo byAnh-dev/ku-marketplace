@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Button, Image, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ApiError, createListing, editListing, Listing, myListing, myListings, OwnedListing, photoURL } from './api';
 import { AddPhotos } from './PhotoPicker';
+import { EditListingForm } from './EditListingForm';
+import { OwnedListingCard } from './OwnedListingCard';
 
 type Props = {
   token: string; onBack: () => void; onOpen: (listing: Listing) => void; onSessionExpired: () => void;
@@ -11,6 +13,8 @@ type LoadState = { phase: 'loading' } | { phase: 'ready'; rows: OwnedListing[] }
 export function MyListings({ token, onBack, onOpen, onSessionExpired }: Props) {
   const [state, setState] = useState<LoadState>({ phase: 'loading' });
   const [attempt, setAttempt] = useState(0);
+  const [managing, setManaging] = useState(false);
+  const [notice, setNotice] = useState('');
   const [editing, setEditing] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [selected, setSelected] = useState<Listing | null>(null);
@@ -37,27 +41,26 @@ export function MyListings({ token, onBack, onOpen, onSessionExpired }: Props) {
   if (creating) return <ListingForm token={token} onBack={backToList} onSessionExpired={onSessionExpired}
     onSaved={listing => { setCreating(false); setSelected(listing); }} />;
 
-  return <ScrollView contentContainerStyle={s.page}>
-    <Button title="Back to marketplace" onPress={onBack} />
+  return <ScrollView style={{ backgroundColor: '#f9f9ff' }} contentContainerStyle={s.page}>
+    <Button title="Back to marketplace" disabled={managing} onPress={onBack} />
     <Text style={s.heading}>My listings</Text>
-    <Button title="Create listing" onPress={() => setCreating(true)} />
+    <Button title="Create listing" disabled={managing} onPress={() => setCreating(true)} />
+    {!!notice && <Text accessibilityRole="status" style={s.body}>{notice}</Text>}
     {state.phase === 'loading' ? <ActivityIndicator accessibilityLabel="Loading my listings" /> :
       state.phase === 'error' ? <View style={s.card}>
         <Text accessibilityRole="alert" style={s.error}>{state.message}</Text>
         <Button title="Retry my listings" onPress={() => setAttempt(n => n + 1)} />
         {state.expired && <Button title="Log in again" onPress={onSessionExpired} />}
       </View> : state.rows.length === 0 ? <Text style={s.body}>You have no listings yet. Create one to add photos.</Text> :
-        state.rows.map(({ listing, status }) => <View key={listing.id} style={s.card}>
-          <Text style={s.title}>{listing.title}</Text>
-          <Text style={s.body}>{status} · ${(listing.priceCents / 100).toFixed(2)}</Text>
-          {!!listing.photoURLs[0] && <Image accessibilityLabel={`Cover photo for ${listing.title}`}
-            source={{ uri: photoURL(listing.photoURLs[0]) }} style={s.photo} />}
-          {status === 'active' && <>
-            <Button title={`Edit ${listing.title}`} onPress={() => setEditing(listing.id)} />
-            <Button title={`View ${listing.title}`} onPress={() => onOpen(listing)} />
-            <Button title={`Add or replace photos for ${listing.title}`} onPress={() => setSelected(listing)} />
-          </>}
-        </View>)}
+        state.rows.map(item => <OwnedListingCard key={item.listing.id} item={item} token={token} disabled={managing}
+          onEdit={() => setEditing(item.listing.id)} onOpen={onOpen} onPhotos={() => setSelected(item.listing)}
+          onBusy={setManaging} onSessionExpired={onSessionExpired} onReload={() => { setNotice(''); setAttempt(n => n + 1); }}
+          onChanged={updated => {
+            setState(current => current.phase === 'ready' ? { phase: 'ready', rows: updated.status === 'deleted'
+              ? current.rows.filter(row => row.listing.id !== updated.listing.id)
+              : current.rows.map(row => row.listing.id === updated.listing.id ? updated : row) } : current);
+            setNotice(updated.status === 'deleted' ? 'Listing deleted.' : 'Listing marked as sold.');
+          }} />)}
   </ScrollView>;
 }
 
@@ -144,6 +147,10 @@ function ListingForm({ token, onBack, onSaved, onSessionExpired, initial, onRelo
       inFlight.current = false; setBusy(false);
     }
   }
+
+  if (initial) return <EditListingForm title={title} description={description} price={price} category={category} condition={condition}
+    setTitle={setTitle} setDescription={setDescription} setPrice={setPrice} setCategory={setCategory} setCondition={setCondition}
+    busy={busy} needsReload={needsReload} error={error} fields={fields} onBack={onBack} onReload={onReload} onSave={publish} />;
 
   return <ScrollView contentContainerStyle={s.page} keyboardShouldPersistTaps="handled">
     <Button title={initial ? "Cancel" : "Back to my listings"} disabled={busy} onPress={onBack} />

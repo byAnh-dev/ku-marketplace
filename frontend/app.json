@@ -35,7 +35,9 @@
           "cameraPermission": false,
           "microphonePermission": false
         }
-      ]
+      ],
+      "expo-font",
+      "expo-image"
     ]
   }
 }

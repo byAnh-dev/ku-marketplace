@@ -13,6 +13,7 @@ function createAppLoader({ modules, globals = {} }) {
   });
   const cache = new Map();
   function load(file) {
+    if (path.extname(file) === '.svg') return file;
     if (!path.extname(file)) file += fs.existsSync(`${file}.ts`) ? '.ts' : '.tsx';
     if (cache.has(file)) return cache.get(file).exports;
     const module = { exports: {} };

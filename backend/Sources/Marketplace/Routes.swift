@@ -74,6 +74,14 @@ func configureRoutes(_ app: Application, catalog: Catalog) {
         }
     }
 
+    let managed = listings.grouped(SessionAuthenticator(), AuthenticatedUser.guardMiddleware())
+    managed.post(":id", "sold") { req async throws -> OwnedListing in
+        try await changeListingStatus(req, catalog: catalog, target: .sold)
+    }
+    managed.delete(":id") { req async throws -> OwnedListing in
+        try await changeListingStatus(req, catalog: catalog, target: .deleted)
+    }
+
     // Upload photos for a listing the caller owns (multipart, field `photos[]`).
     // Replaces the whole set; the first file is the primary photo.
     listings.grouped(SessionAuthenticator(), AuthenticatedUser.guardMiddleware())
@@ -126,3 +134,13 @@ func configureRoutes(_ app: Application, catalog: Catalog) {
 }
 
 private struct SearchQuery: Decodable { let q: String? }
+
+private func changeListingStatus(_ req: Request, catalog: Catalog, target: Catalog.Status) async throws -> OwnedListing {
+    let user = try req.auth.require(AuthenticatedUser.self)
+    guard user.verified else { throw Abort(.forbidden, reason: "Verify your KU email before managing listings.") }
+    guard let id = req.parameters.get("id") else { throw Abort(.notFound) }
+    guard let revision = req.headers.first(name: .ifMatch), !revision.isEmpty else {
+        throw Abort(.preconditionRequired, reason: "Reload your listings before trying again.")
+    }
+    return try await catalog.changeStatus(target, listingID: id, ownerID: user.id, revision: revision)
+}

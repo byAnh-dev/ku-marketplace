@@ -83,6 +83,35 @@ struct Catalog: Sendable {
         }
     }
 
+    /// Status changes serialize with edits and photo uploads. Repeating the same
+    /// action is safe after a lost response; a stale different action must reload.
+    func changeStatus(_ target: Status, listingID: String, ownerID: String, revision: String) async throws -> OwnedListing {
+        guard target == .sold || target == .deleted else { throw Abort(.badRequest) }
+        return try await database.transaction { db in
+            try await ListingRecord.query(on: db).filter(\.$listingID == listingID)
+                .filter(\.$ownerID == ownerID).set(\.$ownerID, to: ownerID).update()
+            guard let record = try await ListingRecord.query(on: db).filter(\.$listingID == listingID)
+                .filter(\.$ownerID == ownerID).first() else {
+                throw Abort(.notFound, reason: "This listing is unavailable.")
+            }
+            if record.status == target.rawValue {
+                return OwnedListing(status: target, listing: record.listing, revision: record.revision ?? "initial")
+            }
+            guard record.status != Status.deleted.rawValue else { throw Abort(.notFound, reason: "This listing is unavailable.") }
+            guard revision == (record.revision ?? "initial") else {
+                throw Abort(.conflict, reason: "This listing has changed. Reload your listings before trying again.")
+            }
+            guard target == .deleted || record.status == Status.active.rawValue || record.status == Status.reserved.rawValue else {
+                throw Abort(.conflict, reason: "This listing cannot be marked sold. Reload your listings.")
+            }
+            let nextRevision = UUID().uuidString
+            record.status = target.rawValue
+            record.revision = nextRevision
+            try await record.update(on: db)
+            return OwnedListing(status: target, listing: record.listing, revision: nextRevision)
+        }
+    }
+
     /// Replaces the photo set of an active listing the caller owns. `urls` must
     /// already be in display order: the first one is the primary photo.
     /// Returns the displaced URLs only after the transaction commits, for safe file cleanup.

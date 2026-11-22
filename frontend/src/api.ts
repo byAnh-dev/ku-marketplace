@@ -33,7 +33,7 @@ export const detail = (id: string, signal: AbortSignal) => get<Listing>(`/${enco
 export const photoURL = (path: string) => /^https?:\/\//.test(path) ? path : `${apiBase}${path.startsWith('/') ? '' : '/'}${path}`;
 
 async function authenticatedRequest<T>(path: string, token: string, body?: string | FormData, signal?: AbortSignal,
-  edit?: { revision: string }): Promise<T> {
+  edit?: { revision: string; method?: 'PATCH' | 'POST' | 'DELETE' }): Promise<T> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal?.addEventListener('abort', abort);
@@ -41,7 +41,7 @@ async function authenticatedRequest<T>(path: string, token: string, body?: strin
   const timeout = setTimeout(abort, body !== undefined && typeof body !== 'string' ? 60000 : 15000);
   try {
     const response = await fetch(`${apiBase}/api/v1/${path}`, {
-      method: edit ? 'PATCH' : body === undefined ? 'GET' : 'POST', body,
+      method: edit ? edit.method ?? 'PATCH' : body === undefined ? 'GET' : 'POST', body,
       headers: { Authorization: `Bearer ${token}`, ...(typeof body === 'string' ? { 'Content-Type': 'application/json' } : {}),
         ...(edit ? { 'If-Match': edit.revision } : {}) },
       signal: controller.signal,
@@ -81,6 +81,10 @@ export const myListing = (id: string, token: string, signal: AbortSignal) =>
   authenticatedRequest<OwnedListing>(`me/listings/${encodeURIComponent(id)}`, token, undefined, signal);
 export const editListing = (id: string, draft: CreateListingBody, revision: string, token: string) =>
   authenticatedRequest<OwnedListing>(`listings/${encodeURIComponent(id)}`, token, JSON.stringify(draft), undefined, { revision });
+export const markListingSold = (id: string, revision: string, token: string) =>
+  authenticatedRequest<OwnedListing>(`listings/${encodeURIComponent(id)}/sold`, token, undefined, undefined, { revision, method: 'POST' });
+export const deleteListing = (id: string, revision: string, token: string) =>
+  authenticatedRequest<OwnedListing>(`listings/${encodeURIComponent(id)}`, token, undefined, undefined, { revision, method: 'DELETE' });
 
 export async function uploadPhotos(listingId: string, photos: PickedPhoto[], token: string): Promise<Listing> {
   const form = new FormData();

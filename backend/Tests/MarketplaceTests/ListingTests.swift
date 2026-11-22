@@ -318,4 +318,79 @@ private struct PublishBody: Content {
         }
     }
 
+
+    @Test func soldAndDeletedListingsLeaveTheMarketplaceAndRejectStaleEdits() async throws {
+        try await withApp(configure: { app in
+            app.middleware.use(TestUser(id: "alice"))
+            _ = try await configureApplication(app, seedListings: fixture())
+        }) { app in
+            let before = try #require(try await ListingRecord.query(on: app.db).filter(\.$listingID == "active").first())
+            let response = try await app.testing().sendRequest(.POST, "api/v1/listings/active/sold", beforeRequest: { req in
+                req.headers.add(name: .ifMatch, value: "initial")
+            })
+            #expect(response.status == .ok)
+            let sold = try response.content.decode(OwnedListing.self)
+            #expect(sold.status == .sold)
+            #expect(sold.revision != "initial")
+            #expect(try await Catalog(database: app.db).active("active") == nil)
+            #expect(try await Catalog(database: app.db).search("DORM").map(\.id) == ["other"])
+            let after = try #require(try await ListingRecord.query(on: app.db).filter(\.$listingID == "active").first())
+            #expect(after.createdAt == before.createdAt)
+            #expect(after.ownerID == before.ownerID)
+            let retry = try await app.testing().sendRequest(.POST, "api/v1/listings/active/sold", beforeRequest: { req in
+                req.headers.add(name: .ifMatch, value: "initial")
+            })
+            #expect(retry.status == .ok)
+            let staleDelete = try await app.testing().sendRequest(.DELETE, "api/v1/listings/active", beforeRequest: { req in
+                req.headers.add(name: .ifMatch, value: "initial")
+            })
+            #expect(staleDelete.status == .conflict)
+            let deleted = try await app.testing().sendRequest(.DELETE, "api/v1/listings/active", beforeRequest: { req in
+                req.headers.add(name: .ifMatch, value: sold.revision)
+            })
+            #expect(deleted.status == .ok)
+            #expect(try deleted.content.decode(OwnedListing.self).status == .deleted)
+            #expect(try await Catalog(database: app.db).owned(by: "alice").contains { $0.listing.id == "active" } == false)
+            for path in ["api/v1/listings/active", "api/v1/me/listings/active"] {
+                #expect(try await app.testing().sendRequest(.GET, path).status == .notFound)
+            }
+            let edit = try await app.testing().sendRequest(.PATCH, "api/v1/listings/active", beforeRequest: { req in
+                req.headers.add(name: .ifMatch, value: sold.revision)
+                try req.content.encode(PublishBody())
+            })
+            #expect(edit.status == .notFound)
+            let deleteRetry = try await app.testing().sendRequest(.DELETE, "api/v1/listings/active", beforeRequest: { req in
+                req.headers.add(name: .ifMatch, value: sold.revision)
+            })
+            #expect(deleteRetry.status == .ok)
+        }
+    }
+
+    @Test func statusActionsRequireOwnershipAndCurrentRevision() async throws {
+        try await withApp(configure: { app in
+            app.middleware.use(TestUser(id: "alice"))
+            _ = try await configureApplication(app, seedListings: fixture())
+        }) { app in
+            for (method, suffix) in [(HTTPMethod.POST, "/sold"), (.DELETE, "")] {
+                for id in ["other", "missing"] {
+                    let response = try await app.testing().sendRequest(method, "api/v1/listings/\(id)\(suffix)", beforeRequest: { req in
+                        req.headers.add(name: .ifMatch, value: "initial")
+                    })
+                    #expect(response.status == .notFound)
+                }
+                let missingVersion = try await app.testing().sendRequest(method, "api/v1/listings/active\(suffix)")
+                #expect(missingVersion.status == .preconditionRequired)
+                let stale = try await app.testing().sendRequest(method, "api/v1/listings/active\(suffix)", beforeRequest: { req in
+                    req.headers.add(name: .ifMatch, value: "stale")
+                })
+                #expect(stale.status == .conflict)
+            }
+            #expect(try await Catalog(database: app.db).active("active") != nil)
+            let reserved = try await app.testing().sendRequest(.POST, "api/v1/listings/reserved/sold", beforeRequest: { req in
+                req.headers.add(name: .ifMatch, value: "initial")
+            })
+            #expect(reserved.status == .ok)
+        }
+    }
+
 }

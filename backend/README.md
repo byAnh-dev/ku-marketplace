@@ -205,3 +205,20 @@ With the API running, `node tests/api-smoke.mjs` checks the public API and denia
 of unverified credentials. `node tests/auth-smoke.mjs` checks auth error paths.
 CI runs the Swift tests and both smoke scripts. Email delivery requires a
 separate provider check.
+
+
+## Mark sold and delete
+
+`POST /api/v1/listings/:id/sold` marks an owned active or reserved listing sold.
+`DELETE /api/v1/listings/:id` soft-deletes an owned listing, including sold items.
+Both require a verified bearer session and the current owned-response `revision`
+in `If-Match`. They return the updated owned listing and revision (`200`).
+Missing revisions return `428`, stale changes `409`, invalid sessions `401`, and
+missing/other-owner listings `404`. Repeating an already completed action is
+idempotent so a retry after a lost response does not fail or resurrect a listing.
+
+Sold listings remain in the owner's history but leave public feed, search, and
+details. Deleted listings also leave My Listings. Neither can be edited or have
+photos replaced. IDs, original dates, seller identity, and existing image files
+are preserved; deletion is not a physical purge of stored images. The app asks
+for confirmation, retains cards on failure, and offers reload after conflicts.
