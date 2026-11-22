@@ -18,8 +18,8 @@ private enum Destination: Sendable {
 }
 
 func registerMessageSends(_ secured: RoutesBuilder) {
-    secured.post("listings", ":listingId", "conversations") { req async throws -> Response in
-        guard let id = req.parameters.get("listingId") else { throw Abort(.notFound) }
+    secured.post("listings", ":id", "conversations") { req async throws -> Response in
+        guard let id = req.parameters.get("id") else { throw Abort(.notFound) }
         return try await send(req, to: .listing(id))
     }
     secured.post("conversations", ":id", "messages") { req async throws -> Response in

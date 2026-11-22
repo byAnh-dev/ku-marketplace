@@ -29,9 +29,16 @@ func configureApplication(_ app: Application, databasePath: String? = nil,
     app.migrations.add(AddListingRevisions())
     app.migrations.add(CreateMarketplaceIndexes())
     app.migrations.add(CreateMessaging())
+    app.migrations.add(CreateUserBlocks())
+    app.migrations.add(CreateUnreadIndex())
     try await app.autoMigrate()
     registerAuthRoutes(app)
     let catalog = Catalog(database: app.db)
     configureRoutes(app, catalog: catalog)
+    let secured = app.grouped("api", "v1").grouped(SessionAuthenticator(), AuthenticatedUser.guardMiddleware())
+    registerMessageSends(secured)
+    registerMessagingHistory(secured)
+    registerUnreadRoutes(secured)
+    registerBlockRoutes(secured)
     return catalog
 }

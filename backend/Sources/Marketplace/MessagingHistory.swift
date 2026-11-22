@@ -8,6 +8,7 @@ private struct InboxConversation: Content {
     let listingTitle: String
     let listingStatus: String
     let peerDisplayName: String
+    let isBuyer: Bool
     let latestMessage: String?
     let blockedByMe: Bool
     let canMessage: Bool
@@ -40,6 +41,7 @@ func registerMessagingHistory(_ secured: RoutesBuilder) {
         return try await sql.raw("""
             SELECT c.id, c.listing_id AS listingId, l.title AS listingTitle, l.status AS listingStatus,
                    peer.display_name AS peerDisplayName, latest.body AS latestMessage,
+                   (c.buyer_id = \(bind: actor)) AS isBuyer,
                    (outgoing.blocker_id IS NOT NULL) AS blockedByMe,
                    (l.status IN ('active', 'reserved') AND outgoing.blocker_id IS NULL
                        AND incoming.blocker_id IS NULL) AS canMessage
