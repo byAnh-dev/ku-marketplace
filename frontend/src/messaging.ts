@@ -2,7 +2,7 @@ import { authenticatedRequest, type OwnedListing } from './api';
 
 export type Conversation = {
   id: string; listingId: string; listingTitle: string; listingStatus: OwnedListing['status'];
-  peerDisplayName: string; blockedByMe: boolean; canMessage: boolean;
+  peerDisplayName: string; isBuyer: boolean; blockedByMe: boolean; canMessage: boolean;
 };
 export type Message = {
   sequence: number; clientMessageId: string; senderId: string; recipientId: string;
