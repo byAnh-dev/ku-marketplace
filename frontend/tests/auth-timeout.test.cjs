@@ -39,6 +39,7 @@ test('the account deadline covers stalled headers and JSON bodies without deleti
     const checks = Promise.all([
       assert.rejects(auth.login('fictional@ku.edu', 'fictional-password'), /Could not reach the account service/),
       assert.rejects(auth.restoreSession(), /Could not reach the account service/),
+      assert.rejects(auth.resendVerification('fictional@ku.edu'), /Could not reach the account service/),
     ]);
     await Promise.race([
       checks,
@@ -46,7 +47,7 @@ test('the account deadline covers stalled headers and JSON bodies without deleti
         watchdog = setTimeout(() => reject(new Error('Account calls exceeded their request deadline.')), 20000);
       }),
     ]);
-    assert.deepEqual([...received].sort(), ['/api/v1/auth/login', '/api/v1/auth/me']);
+    assert.deepEqual([...received].sort(), ['/api/v1/auth/login', '/api/v1/auth/me', '/api/v1/auth/resend-verification']);
     assert.equal(storageWrites, 0);
     assert.equal(storageDeletes, 0);
   } finally {

@@ -86,6 +86,23 @@ private struct PublishBody: Content {
         }
     }
 
+    @Test func ownedLookupTargetsOneListingWithoutChangingVisibilityRules() async throws {
+        let rows = fixture()
+        try await withApp(configure: { app in _ = try await configureApplication(app, seedListings: rows) }) { app in
+            let catalog = Catalog(database: app.db)
+            let active = try await catalog.owned(listingID: "active", by: "alice")
+            let sold = try await catalog.owned(listingID: "sold", by: "alice")
+            let deleted = try await catalog.owned(listingID: "deleted", by: "alice")
+            let foreign = try await catalog.owned(listingID: "active", by: "bob")
+            let missing = try await catalog.owned(listingID: "missing", by: "alice")
+            #expect(active?.status == .active)
+            #expect(sold?.status == .sold)
+            #expect(deleted == nil)
+            #expect(foreign == nil)
+            #expect(missing == nil)
+        }
+    }
+
     @Test func newUserHasEmptyList() async throws {
         try await withApp(configure: { app in
             app.middleware.use(TestUser(id: "new-user"))
@@ -116,6 +133,29 @@ private struct PublishBody: Content {
                 try await app.testing().test(.GET, "api/v1/listings/\(id)") { res async in
                     #expect(res.status == .notFound)
                 }
+            }
+        }
+    }
+
+    @Test func searchFiltersAndPaginatesAtTheDatabaseBoundary() async throws {
+        let sold = row("sold-lamp", owner: "alice", status: .sold)
+        try await withApp(configure: { app in _ = try await configureApplication(app, seedListings: [sold]) }) { app in
+            let catalog = Catalog(database: app.db)
+            for id in ["old", "middle", "new"] {
+                let active = row(id, owner: "alice", status: .active)
+                try await catalog.add(active.listing, ownerID: active.ownerID)
+            }
+            try await app.testing().test(.GET, "api/v1/listings?q=lamp&page=1&per=2") { response async throws in
+                #expect(response.status == .ok)
+                #expect(response.headers.first(name: "X-Page") == "1")
+                #expect(response.headers.first(name: "X-Page-Size") == "2")
+                #expect(response.headers.first(name: "X-Has-More") == "true")
+                #expect(try response.content.decode([Listing].self).map(\.id) == ["new", "middle"])
+            }
+            try await app.testing().test(.GET, "api/v1/listings?q=lamp&page=2&per=2") { response async throws in
+                #expect(response.status == .ok)
+                #expect(response.headers.first(name: "X-Has-More") == "false")
+                #expect(try response.content.decode([Listing].self).map(\.id) == ["old"])
             }
         }
     }

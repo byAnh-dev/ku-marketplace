@@ -38,10 +38,13 @@ import VaporTesting
         return try response.content.decode(Listing.self)
     }
 
-    private func upload(_ app: Application, id: String, files: [[UInt8]], token: String?, malformed: Bool = false) async throws -> TestingHTTPResponse {
+    private func upload(_ app: Application, id: String? = nil, files: [[UInt8]], token: String?, malformed: Bool = false,
+                        listingJSON: String? = nil) async throws -> TestingHTTPResponse {
         let boundary = "photo-tests-\(UUID().uuidString)"
         var body = ByteBuffer()
-        if files.isEmpty && !malformed {
+        if let listingJSON {
+            body.writeString("--\(boundary)\r\nContent-Disposition: form-data; name=\"listing\"\r\n\r\n\(listingJSON)\r\n")
+        } else if files.isEmpty && !malformed {
             body.writeString("--\(boundary)\r\nContent-Disposition: form-data; name=\"note\"\r\n\r\nNo photos selected\r\n")
         }
         for (index, bytes) in files.enumerated() {
@@ -51,7 +54,8 @@ import VaporTesting
             body.writeString("\r\n")
         }
         body.writeString("--\(boundary)--\r\n")
-        return try await app.testing().sendRequest(.POST, "api/v1/listings/\(id)/photos", beforeRequest: { req in
+        let path = id.map { "api/v1/listings/\($0)/photos" } ?? "api/v1/listings"
+        return try await app.testing().sendRequest(.POST, path, beforeRequest: { req in
             req.headers.contentType = HTTPMediaType(type: "multipart", subType: "form-data", parameters: ["boundary": boundary])
             if let token { req.headers.bearerAuthorization = .init(token: token) }
             req.body = body
@@ -80,6 +84,32 @@ import VaporTesting
             result.append(Array(response.body.readableBytesView))
         }
         return result
+    }
+
+    @Test func publishMakesOnlyCompleteListingsVisible() async throws {
+        let fields = #"{"title":"Desk","description":"Two photos","priceCents":1200,"category":"Furniture","condition":"Good"}"#
+        try await withPhotoApp { app, catalog, _ in
+            let (_, token) = try await account(app, email: "publish@ku.edu")
+            let rejected = try await upload(app, files: [Self.png, [1, 2, 3]], token: token, listingJSON: fields)
+            #expect(rejected.status == .unprocessableEntity)
+            #expect(try rejected.content.decode(FieldErrorBody.self).fieldErrors["photos"] != nil)
+            #expect(try await catalog.search("").isEmpty)
+
+            let invalidDraft = try await upload(app, files: [Self.png], token: token, listingJSON: "{}")
+            #expect(invalidDraft.status == .unprocessableEntity)
+            #expect(try invalidDraft.content.decode(FieldErrorBody.self).fieldErrors["title"] != nil)
+            #expect(try await catalog.search("").isEmpty)
+
+            let created = try await upload(app, files: [Self.jpeg, Self.png], token: token, listingJSON: fields)
+            try #require(created.status == .created)
+            let listing = try created.content.decode(Listing.self)
+            #expect(created.headers.first(name: .location) == "/api/v1/listings/\(listing.id)")
+            try #require(listing.photoURLs.count == 2)
+            #expect(try await catalog.search("").map(\.photoURLs) == [listing.photoURLs])
+            let bytes = try await servedBytes(app, urls: listing.photoURLs)
+            #expect(bytes[0].starts(with: [0xff, 0xd8, 0xff]))
+            #expect(bytes[1].starts(with: [0x89, 0x50, 0x4e, 0x47]))
+        }
     }
 
     @Test func realOwnerUploadsOrderedImagesAndReplacesTheSet() async throws {
@@ -117,6 +147,37 @@ import VaporTesting
             let normalizedBytes = try await servedBytes(app, urls: normalizedURLs)
             #expect(normalizedBytes[0].starts(with: [0xff, 0xd8, 0xff]))
             #expect(try await catalog.active(listing.id)?.photoURLs == normalizedURLs)
+        }
+    }
+
+    @Test func photoDeliverySupportsCachedThumbnailsWithoutChangingOriginals() async throws {
+        try await withPhotoApp { app, _, _ in
+            let (_, token) = try await account(app, email: "delivery@ku.edu")
+            let listing = try await publish(app, token: token)
+            let uploaded = try await upload(app, id: listing.id, files: [Self.png], token: token)
+            let url = try #require(uploaded.content.decode(Listing.self).photoURLs.first)
+
+            for path in ["api/v1/listings", "api/v1/listings/" + listing.id, "api/v1/me/listings", "api/v1/auth/me"] {
+                let json = try await app.testing().sendRequest(.GET, path, beforeRequest: { request in
+                    request.headers.bearerAuthorization = .init(token: token)
+                })
+                #expect(json.status == .ok)
+                #expect(json.headers.first(name: .cacheControl) == "no-store")
+            }
+
+            let original = try await app.testing().sendRequest(.GET, String(url.dropFirst()))
+            #expect(original.status == .ok)
+            #expect(original.headers.first(name: .cacheControl) == "public, max-age=31536000, immutable")
+            #expect(original.body.readableBytes > 0)
+
+            let thumbnail = try await app.testing().sendRequest(.GET, String(url.dropFirst()) + "?width=64")
+            #expect(thumbnail.status == .ok)
+            #expect(thumbnail.headers.contentType == .jpeg)
+            #expect(thumbnail.headers.first(name: .cacheControl) == "public, max-age=31536000, immutable")
+            #expect(Array(thumbnail.body.readableBytesView).starts(with: [0xff, 0xd8, 0xff]))
+
+            #expect(try await app.testing().sendRequest(.GET, String(url.dropFirst()) + "?width=32").status == .badRequest)
+            #expect(try await app.testing().sendRequest(.GET, String(url.dropFirst()) + "?width=2048").status == .badRequest)
         }
     }
 

@@ -70,4 +70,44 @@ invalid:
     return 1;
 }
 
+int marketplace_resize_photo(const void *input, size_t length, int max_width,
+                             void **output, size_t *output_length) {
+    if (g_once_init_enter(&initialized)) {
+        int ok = vips_init("ku-marketplace") == 0;
+        if (ok) {
+            vips_cache_set_max(0);
+            vips_concurrency_set(1);
+        }
+        g_once_init_leave(&initialized, ok ? 1 : 2);
+    }
+    *output = NULL;
+    *output_length = 0;
+    if (initialized != 1 || max_width <= 0) return 1;
+
+    VipsImage *image = vips_image_new_from_buffer(input, length, "",
+        "access", VIPS_ACCESS_SEQUENTIAL, NULL);
+    if (image == NULL) goto invalid;
+    VipsImage *resized = image;
+    int width = vips_image_get_width(image);
+    if (width > max_width) {
+        double scale = (double) max_width / (double) width;
+        resized = NULL;
+        if (vips_resize(image, &resized, scale, NULL) != 0) goto invalid;
+    }
+    if (vips_jpegsave_buffer(resized, output, output_length,
+                             "strip", TRUE, "Q", 82, NULL) != 0) goto invalid;
+    if (resized != image && resized != NULL) g_object_unref(resized);
+    g_object_unref(image);
+    return 0;
+
+invalid:
+    if (resized != NULL && resized != image) g_object_unref(resized);
+    if (image != NULL) g_object_unref(image);
+    if (*output != NULL) g_free(*output);
+    *output = NULL;
+    *output_length = 0;
+    vips_error_clear();
+    return 1;
+}
+
 void marketplace_free_photo(void *output) { g_free(output); }

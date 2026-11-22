@@ -11,15 +11,22 @@ struct AuthenticatedUser: Authenticatable, Sendable {
 }
 
 func configureRoutes(_ app: Application, catalog: Catalog) {
+    app.middleware.use(PhotoDeliveryMiddleware(publicDirectory: app.directory.publicDirectory))
     // Uploaded versions are immutable; replacing a set changes the listing's URLs.
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
     let photoStorage = PhotoStorage(publicDirectory: app.directory.publicDirectory)
 
     app.get("health") { _ in ["status": "ok"] }
     let listings = app.grouped("api", "v1", "listings")
-    listings.get { req async throws -> [Listing] in
+    listings.get { req async throws -> Response in
         let query = try req.query.decode(SearchQuery.self)
-        return try await catalog.search(query.q ?? "")
+        let page = try await catalog.search(query.q ?? "", page: query.page ?? 1, per: query.per ?? 20)
+        let response = Response(status: .ok)
+        response.headers.replaceOrAdd(name: "X-Page", value: String(page.page))
+        response.headers.replaceOrAdd(name: "X-Page-Size", value: String(page.per))
+        response.headers.replaceOrAdd(name: "X-Has-More", value: page.hasMore ? "true" : "false")
+        try response.content.encode(page.items)
+        return response
     }
     listings.get(":id") { req async throws -> Listing in
         guard let id = req.parameters.get("id"), let listing = try await catalog.active(id) else {
@@ -30,19 +37,25 @@ func configureRoutes(_ app: Application, catalog: Catalog) {
 
     // Publish. The guard rejects anonymous callers and the verified flag comes
     // from the session, so the client can never claim a seller or a status.
-    listings.grouped(SessionAuthenticator(), AuthenticatedUser.guardMiddleware()).post { req async throws -> Response in
+    listings.grouped(SessionAuthenticator(), AuthenticatedUser.guardMiddleware())
+        .on(.POST, body: .collect(maxSize: "45mb")) { req async throws -> Response in
         let user = try req.auth.require(AuthenticatedUser.self)
         guard user.verified else {
             throw Abort(.forbidden, reason: "Verify your KU email before publishing.")
         }
         do {
-            let draft = try ListingDraft(try req.content.decode(CreateListingBody.self))
-            let listing = Listing(
-                id: UUID().uuidString.lowercased(),
-                title: draft.title, description: draft.description,
-                priceCents: draft.priceCents, condition: draft.condition, category: draft.category,
-                sellerDisplayName: user.displayName, pickupArea: draft.pickupArea, photoURLs: [])
-            try await catalog.add(listing, ownerID: user.id)
+            let (draft, photos) = try decodePublishRequest(req)
+            let id = UUID().uuidString.lowercased()
+            let urls = try await photoStorage.prepareForPublish(photos, listingID: id, on: req)
+            let listing = Listing(id: id, title: draft.title, description: draft.description,
+                                  priceCents: draft.priceCents, condition: draft.condition, category: draft.category,
+                                  sellerDisplayName: user.displayName, pickupArea: draft.pickupArea, photoURLs: urls)
+            do {
+                try await catalog.add(listing, ownerID: user.id)
+            } catch {
+                await photoStorage.discard(urls, listingID: id, on: req)
+                throw error
+            }
             let response = Response(status: .created)
             response.headers.replaceOrAdd(name: .location, value: "/api/v1/listings/\(listing.id)")
             try response.content.encode(listing)
@@ -90,8 +103,7 @@ func configureRoutes(_ app: Application, catalog: Catalog) {
             guard user.verified else {
                 throw Abort(.forbidden, reason: "Verify your KU email before publishing.")
             }
-            guard let id = req.parameters.get("id"),
-                  (try await catalog.owned(by: user.id)).contains(where: { $0.listing.id == id && $0.status == .active }) else {
+            guard let id = req.parameters.get("id") else {
                 throw Abort(.notFound, reason: "This listing is unavailable.")
             }
             do {
@@ -126,14 +138,12 @@ func configureRoutes(_ app: Application, catalog: Catalog) {
     mine.get(":id") { req async throws -> OwnedListing in
         let user = try req.auth.require(AuthenticatedUser.self)
         guard let id = req.parameters.get("id"),
-              let listing = try await catalog.owned(by: user.id).first(where: { $0.listing.id == id }) else {
+              let listing = try await catalog.owned(listingID: id, by: user.id) else {
             throw Abort(.notFound, reason: "This listing is unavailable.")
         }
         return listing
     }
 }
-
-private struct SearchQuery: Decodable { let q: String? }
 
 private func changeListingStatus(_ req: Request, catalog: Catalog, target: Catalog.Status) async throws -> OwnedListing {
     let user = try req.auth.require(AuthenticatedUser.self)
@@ -143,4 +153,30 @@ private func changeListingStatus(_ req: Request, catalog: Catalog, target: Catal
         throw Abort(.preconditionRequired, reason: "Reload your listings before trying again.")
     }
     return try await catalog.changeStatus(target, listingID: id, ownerID: user.id, revision: revision)
+}
+
+private struct SearchQuery: Decodable {
+    let q: String?
+    let page: Int?
+    let per: Int?
+}
+
+private struct PublishWithPhotosBody: Content {
+    let listing: String
+    let photos: [File]
+}
+
+private func decodePublishRequest(_ req: Request) throws -> (ListingDraft, [File]) {
+    guard let type = req.headers.contentType, type.type == "multipart", type.subType == "form-data" else {
+        return (try ListingDraft(try req.content.decode(CreateListingBody.self)), [])
+    }
+    let form: PublishWithPhotosBody
+    let fields: CreateListingBody
+    do {
+        form = try req.content.decode(PublishWithPhotosBody.self)
+        fields = try JSONDecoder().decode(CreateListingBody.self, from: Data(form.listing.utf8))
+    } catch {
+        throw Abort(.badRequest, reason: "Send listing details and selected photos in the multipart form.")
+    }
+    return (try ListingDraft(fields), form.photos)
 }

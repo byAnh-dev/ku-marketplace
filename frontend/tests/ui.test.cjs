@@ -21,7 +21,7 @@ const listing = {
 
 // React, application components, effects, and the API modules execute unchanged.
 // These hosts expose props and events but do not simulate native layout or touch.
-function harness(storedToken) {
+function harness(storedToken, clock) {
   const storage = new Map(storedToken ? [[sessionKey, storedToken]] : []);
   const requests = [];
   const replies = new Map();
@@ -48,6 +48,16 @@ function harness(storedToken) {
       'expo-secure-store': secureStore,
       'expo-image': { Image: 'Image' },
       '@expo-google-fonts/plus-jakarta-sans': { useFonts: () => [true] },
+      'expo-file-system': {
+        File: class {
+          constructor(uri) {
+            this.uri = uri;
+            this.name = new URL(uri).pathname.split('/').at(-1);
+            this.type = this.name.endsWith('.png') ? 'image/png' : 'image/jpeg';
+          }
+          async bytes() { return new TextEncoder().encode(this.uri); }
+        },
+      },
       'expo-image-picker': {
         launchImageLibraryAsync: async () => {
           assert.ok(pickerResults.length, 'Queue a device picker result first');
@@ -58,14 +68,26 @@ function harness(storedToken) {
       },
     },
     globals: {
-      // React Native accepts local file objects; Node's FormData only accepts Blobs.
+      ...(clock ? { Date: class extends Date { static now() { return clock.now; } },
+        setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout } : {}),
+      Blob, TextEncoder,
       FormData: class {
         parts = [];
         append(name, value) { this.parts.push({ name, value }); }
+        *entries() { for (const { name, value } of this.parts) yield [name, value]; }
       },
       fetch: async (url, options = {}) => {
         const route = new URL(url).pathname;
-        requests.push({ url: String(url), ...options, headers: new Headers(options.headers) });
+        const request = { url: String(url), ...options, headers: new Headers(options.headers) };
+        if (options.body?.entries) {
+          const { convertFormDataAsync } = load(path.join(path.dirname(require.resolve('expo/package.json')),
+            'src/winter/fetch/convertFormData.ts'));
+          const { body, boundary } = await convertFormDataAsync(options.body);
+          request.multipart = await new Response(body, {
+            headers: { 'Content-Type': 'multipart/form-data; boundary=' + boundary },
+          }).formData();
+        }
+        requests.push(request);
         const queue = replies.get(route);
         if (!queue?.length && route === '/api/v1/listings' && (!options.method || options.method === 'GET')) return response(200, [listing]);
         if (!queue?.length && route === '/api/v1/listings/desk-1') return response(200, listing);
@@ -135,6 +157,23 @@ async function mount(t, Component, props = {}) {
   return ui;
 }
 
+function manualClock() {
+  let nextID = 0;
+  const timers = new Map();
+  const clock = {
+    now: Date.now(),
+    setTimeout(callback, delay) { const id = ++nextID; timers.set(id, { at: clock.now + delay, callback }); return id; },
+    clearTimeout(id) { timers.delete(id); },
+    advance(milliseconds) {
+      clock.now += milliseconds;
+      for (const [id, timer] of [...timers]) {
+        if (timer.at <= clock.now) { timers.delete(id); timer.callback(); }
+      }
+    },
+  };
+  return clock;
+}
+
 test('public browsing stays available and login/logout preserve the marketplace search', async t => {
   const h = harness();
   const ui = await mount(t, h.App);
@@ -194,6 +233,7 @@ test('registration validates KU email, matching passwords, and UTF-8 bytes befor
   assert.equal(inputValue(ui, 'KU email'), user.email);
   assert.equal(loggedIn, false);
   assert.equal(h.storage.size, 0);
+  assert.equal(control(ui, 'Resend verification email').props.disabled, true);
 });
 
 test('an unverified login stays on the form and displays the backend explanation', async t => {
@@ -310,8 +350,9 @@ test('photo selection preserves order, handles library errors, and sends the ses
     assert.equal(request.method, 'POST');
     assert.equal(request.headers.get('Authorization'), `Bearer ${token}`);
     assert.equal(request.headers.has('Content-Type'), false, 'Native fetch must set the multipart boundary');
-    assert.equal(request.body.parts.map(part => part.name).join(','), 'photos[],photos[]');
-    assert.equal(request.body.parts.map(part => part.value.uri).join(','), 'file:///second.jpg,file:///first.png');
+    const files = request.multipart.getAll('photos[]');
+    assert.deepEqual(files.map(file => file.type), ['image/jpeg', 'image/png']);
+    assert.deepEqual(await Promise.all(files.map(file => file.text())), ['file:///second.jpg', 'file:///first.png']);
   }
 });
 
@@ -342,7 +383,7 @@ test('owned listing requests use bearer authentication and relative photo URLs u
   assert.equal(h.api.photoURL('https://images.example/image.jpg'), 'https://images.example/image.jpg');
 });
 
-test('signed-in users can create an item, upload its photo, and open refreshed public details', async t => {
+async function startListing(t) {
   const h = harness(token);
   h.reply('me', 200, user);
   const ui = await mount(t, h.App);
@@ -350,25 +391,123 @@ test('signed-in users can create an item, upload its photo, and open refreshed p
   await press(ui, 'My listings');
   assert.ok(hasText(ui, 'You have no listings yet.'));
   await press(ui, 'Create listing');
+  return { h, ui };
+}
+
+async function fillListing(ui) {
   await fill(ui, 'Title', listing.title);
   await fill(ui, 'Description', listing.description);
   await fill(ui, 'Price in dollars', '25.00');
   await fill(ui, 'Category', listing.category);
+}
+
+const writes = h => h.requests.filter(request => request.method === 'POST');
+
+test('invalid listing fields show local feedback without a publish request', async t => {
+  const { h, ui } = await startListing(t);
+  await fillListing(ui);
+  for (const [label, invalid, valid] of [
+    ['Title', '   ', listing.title],
+    ['Description', '', listing.description],
+    ['Category', '  ', listing.category],
+    ['Price in dollars', '1.235', '25.00'],
+    ['Price in dollars', '0', '25.00'],
+  ]) {
+    await fill(ui, label, invalid);
+    await press(ui, 'Publish listing');
+    assert.equal(writes(h).length, 0, `Invalid ${label} reached the server`);
+    assert.ok(ui.container.queryAll(node => node.type === 'Text' && node.props.accessibilityRole === 'alert').length);
+    await fill(ui, label, valid);
+  }
+});
+
+test('a valid listing with zero photos publishes directly and opens public details', async t => {
+  const { h, ui } = await startListing(t);
+  await fillListing(ui);
   h.reply('/api/v1/listings', 201, listing);
-  await press(ui, 'Publish and add photos');
-  const publish = h.requests.find(request => request.method === 'POST' && request.url.endsWith('/listings'));
+  await press(ui, 'Publish listing');
+  const [publish] = writes(h);
+  assert.equal(writes(h).length, 1);
+  assert.equal(new URL(publish.url).pathname, '/api/v1/listings');
   assert.equal(publish.headers.get('Authorization'), `Bearer ${token}`);
+  assert.equal(publish.headers.get('Content-Type'), 'application/json');
   assert.equal(JSON.parse(publish.body).priceCents, 2500);
   assert.equal(JSON.parse(publish.body).ownerID, undefined);
-  h.pick({ canceled: false, assets: [{ uri: 'file:///cover.png', mimeType: 'image/png', fileSize: 100 }] });
+  assert.ok(hasText(ui, listing.description));
+  assert.ok(hasText(ui, 'No photo'));
+});
+
+test('a seller can preview, reorder and remove images and retry a rejected publish with the draft intact', async t => {
+  const { h, ui } = await startListing(t);
+  await fillListing(ui);
+  let finishPicking;
+  h.pick(new Promise(resolve => { finishPicking = resolve; }));
   await press(ui, 'Add photos');
-  const updated = { ...listing, photoURLs: ['/uploads/listings/desk-1/version/0.png'] };
-  h.reply(`/api/v1/listings/${listing.id}/photos`, 200, updated);
+  assert.equal(control(ui, 'Publish listing').props.disabled, true);
+  await act(async () => { finishPicking({ canceled: false, assets: [
+    { uri: 'file:///desk.png', fileSize: 100 }, { uri: 'file:///discard.png', fileSize: 100 },
+    { uri: 'file:///cover.jpg', fileSize: 100 },
+  ] }); });
+  await press(ui, 'Remove photo 2');
+  await press(ui, 'Photo 2, make primary');
+  assert.equal(control(ui, 'Primary photo').children[0].props.source.uri, 'file:///cover.jpg');
+  assert.equal(writes(h).length, 0, 'Editing a draft must leave the marketplace unchanged');
+  h.reply('/api/v1/listings', 422, { fieldErrors: { photos: 'Photo is corrupt.' } });
+  await press(ui, 'Publish listing');
+  assert.ok(hasText(ui, 'Photo is corrupt.'));
+  assert.equal(inputValue(ui, 'Title'), listing.title);
+  assert.ok(hasText(ui, '2/5'));
+  const updated = { ...listing, photoURLs: ['/uploads/cover.jpg', '/uploads/desk.png'] };
+  h.reply('/api/v1/listings', 201, updated);
   h.reply(`/api/v1/listings/${listing.id}`, 200, updated);
-  await press(ui, 'Upload photos');
+  await press(ui, 'Publish listing');
+  assert.equal(writes(h).length, 2, 'One publish request per attempt');
+  for (const publish of writes(h)) {
+    assert.equal(new URL(publish.url).pathname, '/api/v1/listings');
+    assert.equal(publish.headers.get('Authorization'), `Bearer ${token}`);
+    assert.equal(publish.headers.has('Content-Type'), false, 'Fetch supplies the multipart boundary');
+    const draft = JSON.parse(publish.multipart.get('listing'));
+    assert.equal(draft.title, listing.title);
+    assert.equal(draft.priceCents, 2500);
+    const photos = publish.multipart.getAll('photos[]');
+    assert.deepEqual(await Promise.all(photos.map(file => file.text())), ['file:///cover.jpg', 'file:///desk.png']);
+  }
   assert.ok(hasText(ui, listing.description));
   assert.ok(ui.container.queryAll(node => node.type === 'Image').some(node =>
     node.props.source.uri === `http://marketplace.test:8080${updated.photoURLs[0]}`));
+});
+
+test('leaving a listing draft with selected photos creates no listing or upload', async t => {
+  const { h, ui } = await startListing(t);
+  await fillListing(ui);
+  h.pick({ canceled: false, assets: [{ uri: 'file:///draft.jpg', fileSize: 100 }] });
+  await press(ui, 'Add photos');
+  h.reply('/api/v1/me/listings', 200, []);
+  await press(ui, 'Back to my listings');
+  assert.equal(writes(h).length, 0);
+  assert.ok(control(ui, 'Create listing'));
+});
+
+test('owner sees a photo placeholder and opens fresh sold details through the private route', async t => {
+  const h = harness(token);
+  h.reply('me', 200, user);
+  const ui = await mount(t, h.App);
+  const sold = { ...listing, id: 'sold-1', title: 'Sold lamp' };
+  const rows = [{ status: 'sold', listing: sold }];
+  h.reply('/api/v1/me/listings', 200, rows);
+  await press(ui, 'My listings');
+  assert.ok(hasText(ui, 'No photo'));
+  const route = '/api/v1/me/listings/sold-1';
+  h.reply(route, 200, { status: 'sold', listing: { ...sold, description: 'Fresh owner-only detail.' } });
+  await press(ui, 'View Sold lamp');
+  const reads = h.requests.filter(request => new URL(request.url).pathname.endsWith('/sold-1'));
+  assert.equal(reads.length, 1);
+  assert.equal(new URL(reads[0].url).pathname, route);
+  assert.equal(reads[0].headers.get('Authorization'), `Bearer ${token}`);
+  assert.ok(hasText(ui, 'Fresh owner-only detail.'));
+  h.reply('/api/v1/me/listings', 200, rows);
+  await press(ui, 'Back to my listings');
+  assert.ok(control(ui, 'View Sold lamp'));
 });
 
 test('My listings restricts photo actions to active items and offers login after session expiry', async t => {
@@ -381,7 +520,7 @@ test('My listings restricts photo actions to active items and offers login after
   ]);
   await press(ui, 'My listings');
   assert.ok(control(ui, `Add or replace photos for ${listing.title}`));
-  assert.equal(ui.container.queryAll(node => node.type === 'Button' && node.props.title === 'Add or replace photos for Sold lamp').length, 0);
+  assert.equal(ui.container.queryAll(node => node.props.accessibilityLabel === 'Add or replace photos for Sold lamp').length, 0);
   await press(ui, 'Back to marketplace');
   h.reply('/api/v1/me/listings', 401, { reason: 'Authentication required.' });
   await press(ui, 'My listings');
@@ -538,4 +677,56 @@ test('stale status actions require reload and expired sessions return to login',
   h.reply(`/api/v1/listings/${listing.id}/sold`, 401, { reason: 'Authentication required.' });
   await press(ui, 'Confirm mark sold');
   assert.ok(control(ui, 'Log in'));
+});
+
+test('resend verification validates email and counts down the server cooldown for each address', async t => {
+  const clock = manualClock();
+  const h = harness(undefined, clock);
+  const ui = await mount(t, h.AuthScreen, { onLogin() {}, onBack() {} });
+  await fill(ui, 'KU email', 'student@example.com');
+  await press(ui, 'Resend verification email');
+  assert.ok(hasText(ui, 'Use your @ku.edu email address.'));
+  assert.equal(h.requests.length, 0);
+  await fill(ui, 'KU email', ' Student@KU.edu ');
+  h.reply('resend-verification', 200, { message: 'Check your KU email.', retryAfterSeconds: 60 });
+  await press(ui, 'Resend verification email');
+  assert.equal(control(ui, 'Resend verification email').props.disabled, true);
+  assert.deepEqual(JSON.parse(h.requests[0].body), { email: user.email });
+  assert.ok(hasText(ui, '60 seconds'));
+  await act(async () => { clock.advance(59000); });
+  assert.ok(hasText(ui, '1 seconds'));
+  await act(async () => { clock.advance(1000); });
+  assert.equal(control(ui, 'Resend verification email').props.disabled, false);
+  h.reply('resend-verification', 429, { reason: 'Please wait before requesting another verification email.', retryAfterSeconds: 37 });
+  await press(ui, 'Resend verification email');
+  assert.ok(hasText(ui, 'Please wait before requesting another verification email.'));
+  assert.ok(hasText(ui, '37 seconds'));
+  await fill(ui, 'KU email', 'another@ku.edu');
+  assert.equal(control(ui, 'Resend verification email').props.disabled, false);
+  await fill(ui, 'KU email', 'STUDENT@KU.EDU');
+  assert.equal(control(ui, 'Resend verification email').props.disabled, true);
+  assert.equal(h.storage.size, 0);
+});
+
+test('an unverified student can resend; duplicate requests and navigation are blocked while delivery is pending', async t => {
+  const h = harness();
+  let loggedIn = false;
+  const ui = await mount(t, h.AuthScreen, { onLogin() { loggedIn = true; }, onBack() {} });
+  await fill(ui, 'KU email', user.email);
+  await fill(ui, 'Password', 'long-password');
+  h.reply('login', 403, { reason: 'Verify your KU email before logging in.' });
+  await press(ui, 'Log in');
+  const finish = h.defer('resend-verification');
+  const resend = control(ui, 'Resend verification email');
+  await act(async () => { resend.props.onPress(); resend.props.onPress(); });
+  assert.equal(h.requests.filter(request => request.url.endsWith('/resend-verification')).length, 1);
+  for (const label of ['Resend verification email', 'Back to marketplace', 'New here? Create an account']) {
+    assert.equal(control(ui, label).props.disabled, true);
+  }
+  assert.ok(ui.container.queryAll(node => node.type === 'TextInput').every(node => node.props.editable === false));
+  await act(async () => { finish(503, { reason: 'Verification email could not be delivered.' }); });
+  assert.ok(hasText(ui, 'Verification email could not be delivered.'));
+  assert.equal(control(ui, 'Resend verification email').props.disabled, false);
+  assert.equal(loggedIn, false);
+  assert.equal(h.storage.size, 0);
 });

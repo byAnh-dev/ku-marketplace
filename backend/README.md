@@ -29,7 +29,7 @@ Listings already lost by restarting an older in-memory backend cannot be recover
 
 | Request | Success | Other responses |
 | --- | --- | --- |
-| `GET /api/v1/listings?q=dorm` | `200`, active listings matching title or description, ignoring case | |
+| `GET /api/v1/listings?q=dorm&page=1&per=20` | `200`, active listings matching title or description, ignoring case; filtering and pagination run in SQLite. Response headers `X-Page`, `X-Page-Size`, and `X-Has-More` describe the page. | |
 | `GET /api/v1/listings/:id` | `200`, public active listing | `404` unavailable |
 | `POST /api/v1/listings` | `201`, created listing plus `Location` | `401` missing or invalid session; `422` field errors; `400` malformed JSON |
 | `POST /api/v1/listings/:id/photos` | `200`, listing with ordered replacement photo URLs | `400` malformed multipart; `401` invalid session; `404` not owned or inactive; `422` invalid photos; `413` request too large |
@@ -49,13 +49,18 @@ stable account ID, never a display name. Owner IDs are not exposed publicly.
 - `401` means prompt for sign-in, not show an empty state.
 - Search trims surrounding whitespace and matches substrings. Clear it by
   omitting `q` or sending `q=`; both return all active listings.
+- Search pages default to 20 items and cap `per` at 50. Page numbers start at
+  1; invalid or missing values use the safe lower bound. Results are ordered
+  newest first and the response remains a JSON array for compatibility.
 - `200 []` for a nonempty search means show no results. Display errors separately.
   URL-encode search values.
 
 ## Publish contract
 
-`POST /api/v1/listings` takes JSON. Only these fields are read; the id, seller,
-and status are server-owned:
+`POST /api/v1/listings` accepts JSON when the seller publishes without photos.
+To publish with photos, send a multipart form containing a `listing` text
+part with the same JSON and one to five `photos[]` file parts in display order.
+Both formats use the following fields. The server assigns the ID, seller and status.
 
 | Field | Rule |
 | --- | --- |
@@ -75,9 +80,11 @@ and status are server-owned:
 
 `401` means the session is missing, invalid, expired, revoked, or belongs to an
 unverified account. Login itself returns `403` for an unverified account.
-A `201` returns the created listing with its server-minted
-`id`, so navigate with `Location` or the body `id`. Photos are attached by the
-photo-upload endpoint; `photoURLs` is empty at creation.
+A `201` returns the created listing with its server-minted `id` and ordered
+`photoURLs`. The server validates the fields and prepares all selected photos
+before inserting the public listing. A rejected photo or unsuccessful storage
+operation leaves the listing unpublished. A photo-free listing has an empty
+`photoURLs` array. Sellers can use the photo-upload endpoint to update photos later.
 
 The frontend form must mirror these rules for instant feedback. The server
 stays authoritative: never send `sellerDisplayName`, `ownerID`, `id`, or
@@ -143,10 +150,29 @@ credentials and listings across container restarts. Most tests use a separate
 in-memory SQLite database; persistence tests reopen a temporary database file.
 
 The account API provides `POST /api/v1/auth/register`, `GET /api/v1/auth/verify`,
-`POST /api/v1/auth/login`, `GET /api/v1/auth/me`, and `POST /api/v1/auth/logout`.
+`POST /api/v1/auth/resend-verification`, `POST /api/v1/auth/login`,
+`GET /api/v1/auth/me`, and `POST /api/v1/auth/logout`.
 Registration requires an exact `ku.edu` email address and a matching password
 of 12–72 UTF-8 bytes. Email verification links expire after 30 minutes. Login
 requires a verified account and returns a session token valid for seven days.
+
+Resend takes `{ "email": "student@ku.edu" }` without a session or password.
+An accepted request returns `200` with a generic `message` and
+`retryAfterSeconds: 60`; unknown and already verified accounts receive the
+same response without sending mail. Invalid KU addresses return `400`.
+An unverified account may request one link per 60 seconds, including the
+initial registration and failed delivery attempts. An early retry returns
+`429`, a `Retry-After` header and `{ "reason": "...", "retryAfterSeconds": N }`.
+
+The cooldown lives in SQLite and survives backend restarts. A pending credential
+reserves the attempt before contacting the email provider. Its fixed 30-minute
+expiry also records the issue time, so no schema change is needed. Pending
+links cannot verify an account. Provider delivery has a 10-second timeout and
+runs outside the database transaction. Successful delivery activates the new
+link and invalidates older verification links atomically; a failed delivery
+returns `503` and preserves the previous usable link. Resend keeps the account
+UUID, password and sessions unchanged. Verification consumes the link and
+marks the account verified in one transaction.
 
 Send `Authorization: Bearer <session token>` to publish, upload photos or read My Listings.
 `SessionAuthenticator` runs before the listing guards. It uses `currentSession`
@@ -200,6 +226,10 @@ multipart encoder; verify library permissions and upload on a device as well.
 details, ordering, saved sessions, ownership, ordered photo links and public
 image bytes. It also checks upgrades from the account-only schema and safe
 recovery when the listing migration has completed before its history is saved.
+
+`VerificationTests` uses real SQLite and HTTP routes with only email delivery
+substituted. It covers expired-link recovery, old-link invalidation, cooldowns,
+concurrent requests, delivery failure, account preservation and restart recovery.
 
 With the API running, `node tests/api-smoke.mjs` checks the public API and denial
 of unverified credentials. `node tests/auth-smoke.mjs` checks auth error paths.

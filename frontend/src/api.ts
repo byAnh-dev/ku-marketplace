@@ -7,13 +7,14 @@ export type Listing = {
   id: string; title: string; description: string; priceCents: number; condition: string;
   category: string; sellerDisplayName: string; pickupArea: string; photoURLs: string[];
 };
+export type ListingPage = { items: Listing[]; page: number; per: number; hasMore: boolean };
 
 export type OwnedListing = { status: 'active' | 'sold' | 'reserved' | 'deleted'; listing: Listing; revision: string };
 export type CreateListingBody = {
   title: string; description: string; priceCents: number;
   category: string; condition: string; pickupArea: string;
 };
-export type PickedPhoto = { uri: string; mimeType?: string };
+export type PickedPhoto = { uri: string };
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string, readonly fieldErrors: Record<string, string> = {}) {
@@ -21,16 +22,27 @@ export class ApiError extends Error {
   }
 }
 
-async function get<T>(path: string, signal: AbortSignal): Promise<T> {
-  const response = await fetch(`${apiBase}/api/v1/listings${path}`, { signal });
+async function get<T>(path: string, signal: AbortSignal): Promise<{ value: T; headers: Headers }> {
+  const response = await fetch(`${apiBase}/api/v1/listings${path}`, { headers: { 'Cache-Control': 'no-cache' }, signal });
   if (!response.ok) throw new ApiError(response.status, response.status === 404 ? 'This listing is unavailable.' : 'The marketplace could not load.');
-  return response.json();
+  return { value: await response.json(), headers: response.headers };
 }
 
-export const search = (q: string, signal: AbortSignal) => get<Listing[]>(`?q=${encodeURIComponent(q)}`, signal);
-export const detail = (id: string, signal: AbortSignal) => get<Listing>(`/${encodeURIComponent(id)}`, signal);
+export async function search(q: string, page: number, signal: AbortSignal): Promise<ListingPage> {
+  const result = await get<Listing[]>(`?q=${encodeURIComponent(q)}&page=${page}&per=20`, signal);
+  const header = (name: string, fallback: string) => result.headers.get(name) || fallback;
+  return { items: result.value, page: Number(header('X-Page', String(page))), per: Number(header('X-Page-Size', '20')),
+    hasMore: header('X-Has-More', 'false') === 'true' };
+}
+export async function detail(id: string, signal: AbortSignal): Promise<Listing> {
+  return (await get<Listing>(`/${encodeURIComponent(id)}`, signal)).value;
+}
 
 export const photoURL = (path: string) => /^https?:\/\//.test(path) ? path : `${apiBase}${path.startsWith('/') ? '' : '/'}${path}`;
+export const photoThumbnailURL = (path: string, width = 480) => {
+  const url = photoURL(path);
+  return `${url}${url.includes('?') ? '&' : '?'}width=${width}`;
+};
 
 async function authenticatedRequest<T>(path: string, token: string, body?: string | FormData, signal?: AbortSignal,
   edit?: { revision: string; method?: 'PATCH' | 'POST' | 'DELETE' }): Promise<T> {
@@ -43,6 +55,7 @@ async function authenticatedRequest<T>(path: string, token: string, body?: strin
     const response = await fetch(`${apiBase}/api/v1/${path}`, {
       method: edit ? edit.method ?? 'PATCH' : body === undefined ? 'GET' : 'POST', body,
       headers: { Authorization: `Bearer ${token}`, ...(typeof body === 'string' ? { 'Content-Type': 'application/json' } : {}),
+        ...(!edit && body === undefined ? { 'Cache-Control': 'no-cache' } : {}),
         ...(edit ? { 'If-Match': edit.revision } : {}) },
       signal: controller.signal,
     });
@@ -76,8 +89,7 @@ async function authenticatedRequest<T>(path: string, token: string, body?: strin
 }
 
 export const myListings = (token: string, signal: AbortSignal) => authenticatedRequest<OwnedListing[]>('me/listings', token, undefined, signal);
-export const createListing = (draft: CreateListingBody, token: string) => authenticatedRequest<Listing>('listings', token, JSON.stringify(draft));
-export const myListing = (id: string, token: string, signal: AbortSignal) =>
+export const ownedListing = (id: string, token: string, signal: AbortSignal) =>
   authenticatedRequest<OwnedListing>(`me/listings/${encodeURIComponent(id)}`, token, undefined, signal);
 export const editListing = (id: string, draft: CreateListingBody, revision: string, token: string) =>
   authenticatedRequest<OwnedListing>(`listings/${encodeURIComponent(id)}`, token, JSON.stringify(draft), undefined, { revision });
@@ -86,14 +98,21 @@ export const markListingSold = (id: string, revision: string, token: string) =>
 export const deleteListing = (id: string, revision: string, token: string) =>
   authenticatedRequest<OwnedListing>(`listings/${encodeURIComponent(id)}`, token, undefined, undefined, { revision, method: 'DELETE' });
 
-export async function uploadPhotos(listingId: string, photos: PickedPhoto[], token: string): Promise<Listing> {
+function photoForm(photos: Blob[]): FormData {
   const form = new FormData();
-  photos.forEach((photo, index) => {
-    const type = photo.mimeType || 'image/jpeg';
-    const extension = type === 'image/png' ? 'png' : type === 'image/heic' || type === 'image/heif' ? 'heic' : 'jpg';
-    // React Native encodes local file references as multipart file parts.
-    form.append('photos[]', { uri: photo.uri, name: `photo-${index}.${extension}`, type } as unknown as Blob);
-  });
-  return authenticatedRequest<Listing>(`listings/${encodeURIComponent(listingId)}/photos`, token, form);
+  for (const photo of photos) form.append('photos[]', photo);
+  return form;
+}
+
+export function createListing(draft: CreateListingBody, token: string, photos: Blob[] = []): Promise<Listing> {
+  const listing = JSON.stringify(draft);
+  if (photos.length === 0) return authenticatedRequest<Listing>('listings', token, listing);
+  const form = photoForm(photos);
+  form.append('listing', listing);
+  return authenticatedRequest<Listing>('listings', token, form);
+}
+
+export async function uploadPhotos(listingId: string, photos: Blob[], token: string): Promise<Listing> {
+  return authenticatedRequest<Listing>(`listings/${encodeURIComponent(listingId)}/photos`, token, photoForm(photos));
 }
 

@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, Button, FlatList, Image, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { ApiError, detail, Listing, photoURL, search } from './src/api';
+import { ApiError, detail, Listing, ownedListing, photoURL, search } from './src/api';
 import { AuthScreen } from './src/AuthScreen';
 import { logout, restoreSession, Session } from './src/auth';
 import { MyListings } from './src/MyListings';
@@ -37,37 +37,52 @@ function Photo({ uri }: { uri?: string }) {
     <View style={[s.photo, s.placeholder]}><Text style={s.label}>No photo</Text></View>;
 }
 
-function Details({ id, back }: { id: string; back: () => void }) {
-  const { state, retry } = useResource(id, detail);
+function Details({ id, back, ownerToken }: { id: string; back: () => void; ownerToken?: string }) {
+  const load = useCallback(async (listingId: string, signal: AbortSignal): Promise<{ listing: Listing; status?: string }> => {
+    if (ownerToken) return ownedListing(listingId, ownerToken, signal);
+    return { listing: await detail(listingId, signal) };
+  }, [ownerToken]);
+  const { state, retry } = useResource(id, load);
   return <ScrollView contentContainerStyle={s.page}>
-    <Button title="Back to marketplace" onPress={back} />
+    <Button title={ownerToken ? 'Back to my listings' : 'Back to marketplace'} onPress={back} />
     {state.phase !== 'ready' ? <Feedback state={state} retry={retry} /> : <>
-      <Text style={s.label}>{state.value.category}</Text><Text style={s.heading}>{state.value.title}</Text>
-      <Text style={s.price}>{money(state.value.priceCents)}</Text>
-      {state.value.photoURLs.length ? state.value.photoURLs.map(uri => <Photo key={uri} uri={uri} />) : <Photo />}
-      <Text style={s.body}>{state.value.description}</Text>
-      <Text style={s.body}>Condition: {state.value.condition}</Text>
-      <Text style={s.body}>Seller: {state.value.sellerDisplayName}</Text>
-      <Text style={s.body}>Pickup: {state.value.pickupArea}</Text>
+      <Text style={s.label}>{state.value.listing.category}</Text><Text style={s.heading}>{state.value.listing.title}</Text>
+      <Text style={s.price}>{money(state.value.listing.priceCents)}</Text>
+      {state.value.status && <Text style={s.body}>Status: {state.value.status}</Text>}
+      {state.value.listing.photoURLs.length ? state.value.listing.photoURLs.map(uri => <Photo key={uri} uri={uri} />) : <Photo />}
+      <Text style={s.body}>{state.value.listing.description}</Text>
+      <Text style={s.body}>Condition: {state.value.listing.condition}</Text>
+      <Text style={s.body}>Seller: {state.value.listing.sellerDisplayName}</Text>
+      <Text style={s.body}>Pickup: {state.value.listing.pickupArea}</Text>
       <Text style={s.label}>Buyers and sellers arrange pickup and payment themselves.</Text>
     </>}
   </ScrollView>;
 }
 
 function Market({ query, setQuery, open, account }: { query: string; setQuery: (q: string) => void; open: (id: string) => void; account: React.ReactNode }) {
-  const { state, retry } = useResource(query, search);
+  const [page, setPage] = useState(1);
+  useEffect(() => setPage(1), [query]);
+  const loadPage = useCallback((key: string, signal: AbortSignal) => {
+    const [term, currentPage] = key.split('\u0000');
+    return search(term, Number(currentPage), signal);
+  }, []);
+  const { state, retry } = useResource(`${query}\u0000${page}`, loadPage);
   return <View style={[s.page, s.fill]}>
     <Text style={s.label}>UNIVERSITY OF KANSAS</Text><Text style={s.heading}>KU Marketplace</Text>
     {account}
     <TextInput style={s.input} accessibilityLabel="Search listings" placeholder="Search items by keyword" placeholderTextColor="#606975" value={query} onChangeText={setQuery} />
     {query.length > 0 && <Button title="Clear search" onPress={() => setQuery('')} />}
     {state.phase !== 'ready' ? <Feedback state={state} retry={retry} /> :
-      <FlatList data={state.value} keyExtractor={item => item.id}
+      <FlatList data={state.value.items} keyExtractor={item => item.id}
         ListEmptyComponent={<Text style={s.body}>{query.trim() ? 'No matching items. Try another keyword.' : 'No active listings yet.'}</Text>}
         renderItem={({ item }) => <Pressable accessibilityRole="button" style={s.card} onPress={() => open(item.id)}>
           <Photo uri={item.photoURLs[0]} /><Text style={s.label}>{item.category}</Text>
           <Text style={s.title}>{item.title}</Text><Text style={s.price}>{money(item.priceCents)}</Text>
-        </Pressable>} />}
+        </Pressable>}
+        ListFooterComponent={<View style={s.pagination}>
+          {page > 1 && <Button title="Previous page" onPress={() => setPage(current => current - 1)} />}
+          {state.value.hasMore && <Button title="Next page" onPress={() => setPage(current => current + 1)} />}
+        </View>} />}
   </View>;
 }
 
@@ -113,9 +128,9 @@ export default function App() {
   </View> : <Button title="Student login / register" onPress={() => setAuthOpen(true)} />;
   return <SafeAreaView style={s.fill}><StatusBar style="dark" />
     {authOpen ? <AuthScreen onBack={() => setAuthOpen(false)} onLogin={value => { setSession(value); setAuthError(''); setAuthOpen(false); }} /> :
-      myListingsOpen && session ? <MyListings token={session.token} onBack={() => setMyListingsOpen(false)}
+      id ? <Details id={id} back={() => setId(null)} ownerToken={myListingsOpen ? session?.token : undefined} /> :
+      myListingsOpen && session ? <MyListings token={session.token} onBack={() => setMyListingsOpen(false)} onViewOwned={setId}
         onOpen={listing => { setMyListingsOpen(false); setId(listing.id); }} onSessionExpired={sessionExpired} /> :
-      id ? <Details id={id} back={() => setId(null)} /> :
       <Market query={query} setQuery={setQuery} open={setId} account={account} />}
   </SafeAreaView>;
 }
@@ -129,6 +144,7 @@ const s = StyleSheet.create({
   input: { borderWidth: 1, borderColor: '#9aa7b5', borderRadius: 8, backgroundColor: 'white', padding: 12, color: '#152f52' },
   card: { borderRadius: 12, backgroundColor: 'white', padding: 14, gap: 6, marginBottom: 12 },
   photo: { width: '100%', height: 120, borderRadius: 8 },
+  pagination: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8 },
   placeholder: { backgroundColor: '#e7edf0', alignItems: 'center', justifyContent: 'center' },
   price: { color: '#174d7e', fontSize: 20, fontWeight: '700' },
   body: { color: '#263745', fontSize: 17 },

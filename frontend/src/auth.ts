@@ -13,7 +13,7 @@ async function request(path: string, body?: object, token?: string): Promise<Acc
     const response = await fetch(`${apiBase}/api/v1/auth/${path}`, {
       method: body === undefined ? 'GET' : 'POST',
       headers: {
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...(body === undefined ? { 'Cache-Control': 'no-cache' } : { 'Content-Type': 'application/json' }),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),
@@ -52,6 +52,19 @@ export async function register(displayName: string, email: string, password: str
   const data = response.data as { message?: unknown } | null;
   if (typeof data?.message !== 'string') throw new Error('The account service returned an invalid response.');
   return data.message;
+}
+
+export async function resendVerification(email: string): Promise<{ message: string; retryAfterSeconds: number }> {
+  const response = await request('resend-verification', { email: email.trim().toLowerCase() });
+  if (response.status !== 429) requireSuccess(response);
+  const data = response.data as { message?: unknown; reason?: unknown; retryAfterSeconds?: unknown } | null;
+  const message = response.status === 429 ? data?.reason : data?.message;
+  const seconds = data?.retryAfterSeconds;
+  if (typeof message !== 'string' || !message.trim() || typeof seconds !== 'number' ||
+      !Number.isSafeInteger(seconds) || seconds < 1 || seconds > 60) {
+    throw new Error('The account service returned an invalid response. Please try again.');
+  }
+  return { message, retryAfterSeconds: seconds };
 }
 
 export async function login(email: string, password: string): Promise<Session> {

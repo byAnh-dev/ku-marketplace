@@ -7,7 +7,7 @@ An iOS-first marketplace for University of Kansas students. This Team 19 starter
 1. Install Docker Desktop with Linux containers (or Docker Engine with Compose) and Node.js 24 with npm. Start the Docker engine.
 2. From the repo root, run `docker compose up --build`. The first Swift build downloads and compiles dependencies. Open <http://localhost:8080/health> and expect `{"status":"ok"}`. With a Swift 6.3 toolchain on macOS or Linux, install libvips (`brew install vips` or `apt install libvips-dev libheif-plugin-libde265` on Ubuntu 24.04) and run `swift run Marketplace serve --hostname 0.0.0.0` from `backend/`.
 3. In a second terminal, run `cd frontend`, then `npm ci`. For an iOS simulator on the API machine, leave the API URL unset. For the standard Android emulator the default is `http://10.0.2.2:8080`.
-4. On a **physical phone**, copy `.env.example` to `.env.local` inside `frontend/` and replace the URL with `http://<computer-LAN-IP>:8080`. Connect both devices to the same trusted network and check that the phone can open the health URL. Restart Metro after changing the URL. Never put secrets in an `EXPO_PUBLIC_*` variable.
+4. On a **physical phone**, create `frontend/.env.local` with the line `EXPO_PUBLIC_API_URL=http://<computer-LAN-IP>:8080`. Use your computer's LAN IP address. Connect both devices to the same trusted network and check that the phone can open the health URL. Restart Metro after changing the URL. Never put secrets in an `EXPO_PUBLIC_*` variable.
 5. Run `npm start` and scan the QR code with an Expo Go client compatible with SDK 58. On a Mac with Xcode and an installed iOS simulator, press **i**; for a local native build use `npx expo run:ios`. On Windows use a physical device or Android emulator. To stop the API, run `docker compose down`.
 
 ## Try the starter
@@ -21,6 +21,12 @@ the provider configuration in [backend/README.md](backend/README.md). For local
 fictional accounts, enable `DEV_EMAIL_VERIFICATION=true` on the backend and use
 the link from its logs.
 
+If the verification email is missing or its link has expired, enter your KU
+email on the login screen and choose **Resend verification email**. Wait 60
+seconds between attempts, including after registration. A successful resend
+replaces older links with a new 30-minute link for the same account. Failed
+delivery keeps the previous link usable until it expires.
+
 The app stores only the session token in Expo SecureStore and checks it with
 `GET /api/v1/auth/me` when it starts. Expired or revoked sessions return to the
 login option. Temporary connection failures keep the token and show **Retry
@@ -29,14 +35,17 @@ on the server before removing it from the device. If logout cannot reach the
 server, reconnect and retry. An already expired or revoked token can be removed
 locally without another successful revocation.
 
-After login, open **My listings**, then **Create listing**. Use **Edit** on an active
-listing to update its title, description, price, category, or condition. Cancel
-leaves it unchanged; if another save or status change makes the form stale, use
-**Reload listing** to fetch the latest details before trying again. Publish the details
-and select one to five photos, or use **Add or replace photos** on an active
-item you own. Tap a selected image to make it the cover. Upload replaces the
-entire photo set; a failed upload keeps the previous set. JPEG, PNG and HEIC
-are accepted, up to 8 MiB and 20 megapixels each. HEIC becomes JPEG for display.
+After login, open **My listings**, then **Create listing**. Enter the details and
+choose up to five optional photos. Preview or remove photos and tap a photo to
+make it the cover before selecting **Publish listing**. You can publish with no
+photos. If a selected photo is rejected, the form keeps your draft for correction.
+Later, **Add or replace photos** replaces an active item's entire photo set.
+JPEG, PNG and HEIC are accepted, up to 8 MiB and 20 megapixels each. HEIC becomes
+JPEG for display. Open a sold item from **My listings** to see its owner-only details.
+
+Use **Edit** to update an active listing. If your copy is stale, **Reload listing**
+to fetch the current revision. **Mark Sold** keeps the item in My listings, and
+**Delete** removes it. Both actions ask for confirmation.
 
 Run `npm test` in `frontend/` for the client protocol and rendered component
 tests. These run the real React components and account client with substituted
@@ -46,7 +55,7 @@ SecureStore and interaction on an iOS or Android device.
 | Route | Result |
 | --- | --- |
 | `GET /health` | Service health |
-| `GET /api/v1/listings?q=dorm` | Active listings; optional case-insensitive title/description search |
+| `GET /api/v1/listings?q=dorm&page=1&per=20` | Active listings; optional case-insensitive title/description search with database-side pagination. `X-Page`, `X-Page-Size`, and `X-Has-More` describe the returned page. |
 | `GET /api/v1/listings/desk-lamp` | One public listing, including integer price in USD cents, seller display name, general pickup area and ordered photo URLs |
 | `POST /api/v1/listings` | Creates an active listing for the signed-in verified seller; `401` without a valid verified session, `422` with per-field errors |
 | `POST /api/v1/listings/:id/photos` | Replaces an active owned listing's photos; bearer session and multipart `photos[]` required |

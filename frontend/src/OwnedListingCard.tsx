@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image as AssetImage } from 'expo-image';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
-import { ApiError, deleteListing, Listing, markListingSold, OwnedListing, photoURL } from './api';
+import { ApiError, deleteListing, Listing, markListingSold, OwnedListing, photoThumbnailURL } from './api';
 
 type Props = {
   item: OwnedListing; token: string; disabled: boolean;
@@ -55,7 +55,7 @@ export function OwnedListingCard(p: Props) {
     <View style={s.row}>
       <View style={s.photoBox}>
         {listing.photoURLs[0] ? <Image accessibilityLabel={`Cover photo for ${listing.title}`}
-          source={{ uri: photoURL(listing.photoURLs[0]) }} style={s.photo} /> : <View style={[s.photo, s.placeholder]}><Text style={[s.small, font]}>No photo</Text></View>}
+          source={{ uri: photoThumbnailURL(listing.photoURLs[0]) }} style={s.photo} /> : <View style={[s.photo, s.placeholder]}><Text style={[s.small, font]}>No photo</Text></View>}
         <Text style={[s.condition, bold]}>{listing.condition}</Text>
       </View>
       <View style={s.details}>
@@ -73,10 +73,8 @@ export function OwnedListingCard(p: Props) {
       </View>
     </View>
     {!confirmation && <View style={s.secondaryActions}>
-      {status === 'active' && <>
-        {action(`View ${listing.title}`, 'View listing', () => p.onOpen(listing))}
-        {action(`Add or replace photos for ${listing.title}`, 'Photos', p.onPhotos)}
-      </>}
+      {action(`View ${listing.title}`, 'View listing', () => p.onOpen(listing))}
+      {status === 'active' && action(`Add or replace photos for ${listing.title}`, 'Photos', p.onPhotos)}
       {action(`Delete ${listing.title}`, 'Delete', () => setConfirmation('deleted'), true)}
     </View>}
     {!!confirmation && <View style={s.confirmation}>
