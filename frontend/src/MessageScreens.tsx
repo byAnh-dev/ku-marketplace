@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { uuid } from 'expo';
-import { ActivityIndicator, AppState, Button, FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, AppState, Button, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ApiError, type Listing } from './api';
 import type { Session } from './auth';
 import { setBlocked } from './blocks';
@@ -198,7 +198,7 @@ export function ThreadScreen({ screen, session, poll, back, onExpired }: Omit<Sh
       if (mounted.current) { setBusy(false); poll.refresh(); }
     }
   }
-  return <View style={s.page}>
+  return <KeyboardAvoidingView style={s.page} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
     <Button title={id ? 'Back to messages' : 'Back to listing'} onPress={() => back(!!id)} disabled={busy} />
     <Text style={s.heading}>{screen.kind === 'new' ? screen.listing.title : screen.conversation.listingTitle}</Text>
     <Text>{screen.kind === 'new' ? screen.listing.sellerDisplayName : screen.conversation.peerDisplayName}</Text>
@@ -213,7 +213,7 @@ export function ThreadScreen({ screen, session, poll, back, onExpired }: Omit<Sh
     {state.canMessage ? <><TextInput multiline accessibilityLabel="Message" placeholder="Write a message" style={s.input} editable={!busy}
       value={draft} onChangeText={setDraft} /><Button title={sendError && pending.current?.body === draft ? 'Retry send' : 'Send'}
       disabled={busy || !draft.trim()} onPress={send} /></> : <Text>This conversation is read-only.</Text>}
-  </View>;
+  </KeyboardAvoidingView>;
 }
 
 const s = StyleSheet.create({
