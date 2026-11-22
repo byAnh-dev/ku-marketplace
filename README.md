@@ -49,7 +49,7 @@ SecureStore and interaction on an iOS or Android device.
 | Route | Result |
 | --- | --- |
 | `GET /health` | Service health |
-| `GET /api/v1/listings?q=dorm` | Active listings; optional case-insensitive title/description search |
+| `GET /api/v1/listings?q=dorm&page=1&per=20` | Active listings; optional case-insensitive title/description search with database-side pagination. `X-Page`, `X-Page-Size`, and `X-Has-More` describe the returned page. |
 | `GET /api/v1/listings/desk-lamp` | One public listing, including integer price in USD cents, seller display name, general pickup area and ordered photo URLs |
 | `POST /api/v1/listings` | Creates an active listing for the signed-in verified seller; `401` without a valid verified session, `422` with per-field errors |
 | `POST /api/v1/listings/:id/photos` | Replaces an active owned listing's photos; bearer session and multipart `photos[]` required |

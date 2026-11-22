@@ -29,7 +29,7 @@ Listings already lost by restarting an older in-memory backend cannot be recover
 
 | Request | Success | Other responses |
 | --- | --- | --- |
-| `GET /api/v1/listings?q=dorm` | `200`, active listings matching title or description, ignoring case | |
+| `GET /api/v1/listings?q=dorm&page=1&per=20` | `200`, active listings matching title or description, ignoring case; filtering and pagination run in SQLite. Response headers `X-Page`, `X-Page-Size`, and `X-Has-More` describe the page. | |
 | `GET /api/v1/listings/:id` | `200`, public active listing | `404` unavailable |
 | `POST /api/v1/listings` | `201`, created listing plus `Location` | `401` missing or invalid session; `422` field errors; `400` malformed JSON |
 | `POST /api/v1/listings/:id/photos` | `200`, listing with ordered replacement photo URLs | `400` malformed multipart; `401` invalid session; `404` not owned or inactive; `422` invalid photos; `413` request too large |
@@ -49,6 +49,9 @@ stable account ID, never a display name. Owner IDs are not exposed publicly.
 - `401` means prompt for sign-in, not show an empty state.
 - Search trims surrounding whitespace and matches substrings. Clear it by
   omitting `q` or sending `q=`; both return all active listings.
+- Search pages default to 20 items and cap `per` at 50. Page numbers start at
+  1; invalid or missing values use the safe lower bound. Results are ordered
+  newest first and the response remains a JSON array for compatibility.
 - `200 []` for a nonempty search means show no results. Display errors separately.
   URL-encode search values.
 

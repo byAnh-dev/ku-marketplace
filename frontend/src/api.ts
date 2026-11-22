@@ -7,6 +7,7 @@ export type Listing = {
   id: string; title: string; description: string; priceCents: number; condition: string;
   category: string; sellerDisplayName: string; pickupArea: string; photoURLs: string[];
 };
+export type ListingPage = { items: Listing[]; page: number; per: number; hasMore: boolean };
 
 export type OwnedListing = { status: 'active' | 'sold' | 'reserved' | 'deleted'; listing: Listing };
 export type CreateListingBody = {
@@ -21,14 +22,21 @@ export class ApiError extends Error {
   }
 }
 
-async function get<T>(path: string, signal: AbortSignal): Promise<T> {
+async function get<T>(path: string, signal: AbortSignal): Promise<{ value: T; headers: Headers }> {
   const response = await fetch(`${apiBase}/api/v1/listings${path}`, { signal });
   if (!response.ok) throw new ApiError(response.status, response.status === 404 ? 'This listing is unavailable.' : 'The marketplace could not load.');
-  return response.json();
+  return { value: await response.json(), headers: response.headers };
 }
 
-export const search = (q: string, signal: AbortSignal) => get<Listing[]>(`?q=${encodeURIComponent(q)}`, signal);
-export const detail = (id: string, signal: AbortSignal) => get<Listing>(`/${encodeURIComponent(id)}`, signal);
+export async function search(q: string, page: number, signal: AbortSignal): Promise<ListingPage> {
+  const result = await get<Listing[]>(`?q=${encodeURIComponent(q)}&page=${page}&per=20`, signal);
+  const header = (name: string, fallback: string) => result.headers.get(name) || fallback;
+  return { items: result.value, page: Number(header('X-Page', String(page))), per: Number(header('X-Page-Size', '20')),
+    hasMore: header('X-Has-More', 'false') === 'true' };
+}
+export async function detail(id: string, signal: AbortSignal): Promise<Listing> {
+  return (await get<Listing>(`/${encodeURIComponent(id)}`, signal)).value;
+}
 
 export const photoURL = (path: string) => /^https?:\/\//.test(path) ? path : `${apiBase}${path.startsWith('/') ? '' : '/'}${path}`;
 

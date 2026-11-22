@@ -17,9 +17,15 @@ func configureRoutes(_ app: Application, catalog: Catalog) {
 
     app.get("health") { _ in ["status": "ok"] }
     let listings = app.grouped("api", "v1", "listings")
-    listings.get { req async throws -> [Listing] in
+    listings.get { req async throws -> Response in
         let query = try req.query.decode(SearchQuery.self)
-        return try await catalog.search(query.q ?? "")
+        let page = try await catalog.search(query.q ?? "", page: query.page ?? 1, per: query.per ?? 20)
+        let response = Response(status: .ok)
+        response.headers.replaceOrAdd(name: "X-Page", value: String(page.page))
+        response.headers.replaceOrAdd(name: "X-Page-Size", value: String(page.per))
+        response.headers.replaceOrAdd(name: "X-Has-More", value: page.hasMore ? "true" : "false")
+        try response.content.encode(page.items)
+        return response
     }
     listings.get(":id") { req async throws -> Listing in
         guard let id = req.parameters.get("id"), let listing = try await catalog.active(id) else {
@@ -105,4 +111,8 @@ func configureRoutes(_ app: Application, catalog: Catalog) {
     }
 }
 
-private struct SearchQuery: Decodable { let q: String? }
+private struct SearchQuery: Decodable {
+    let q: String?
+    let page: Int?
+    let per: Int?
+}

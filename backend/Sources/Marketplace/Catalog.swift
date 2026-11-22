@@ -20,16 +20,44 @@ struct Catalog: Sendable {
 
     let database: any Database
 
-    /// Active listings only, newest first. A blank query means every active item.
+    /// Active listings only, newest first. Filtering and pagination happen in the database.
     func search(_ query: String) async throws -> [Listing] {
         let term = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let records = try await ListingRecord.query(on: database)
-            .filter(\.$status == Status.active.rawValue).sort(\.$id, .descending).all()
-        // Preserve Swift's existing Unicode case folding and literal substring search.
-        return records.compactMap { record in
-            let item = record.listing
-            return term.isEmpty || item.title.lowercased().contains(term) || item.description.lowercased().contains(term) ? item : nil
+        var request = ListingRecord.query(on: database)
+            .filter(\.$status == Status.active.rawValue)
+        if !term.isEmpty {
+            request = request.group(.or) { group in
+                group.filter(\.$title ~~ term).filter(\.$description ~~ term)
+            }
         }
+        return try await request.sort(\.$id, .descending).all().map(\.listing)
+    }
+
+    struct SearchPage: Sendable {
+        let items: [Listing]
+        let page: Int
+        let per: Int
+        let hasMore: Bool
+    }
+
+    func search(_ query: String, page: Int, per: Int) async throws -> SearchPage {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let safePage = max(page, 1)
+        let safePer = min(max(per, 1), 50)
+        let offset = (safePage - 1) * safePer
+        var request = ListingRecord.query(on: database)
+            .filter(\.$status == Status.active.rawValue)
+        if !term.isEmpty {
+            request = request.group(.or) { group in
+                group.filter(\.$title ~~ term).filter(\.$description ~~ term)
+            }
+        }
+        let records = try await request
+            .sort(\.$id, .descending)
+            .range(offset..<(offset + safePer + 1))
+            .all()
+        let hasMore = records.count > safePer
+        return SearchPage(items: records.prefix(safePer).map(\.listing), page: safePage, per: safePer, hasMore: hasMore)
     }
 
     func active(_ id: String) async throws -> Listing? {
