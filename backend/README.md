@@ -83,6 +83,27 @@ The frontend form must mirror these rules for instant feedback. The server
 stays authoritative: never send `sellerDisplayName`, `ownerID`, `id`, or
 `status`, and expect them to be ignored if sent.
 
+## Edit owned listings
+
+Fetch `GET /api/v1/me/listings/:id` with a bearer session to populate the edit
+form. Owned responses include an opaque `revision`. Send it in `If-Match` on
+`PATCH /api/v1/listings/:id`, with title, description, priceCents, category,
+and condition using the publish validation rules. A successful response is
+the updated owned listing, including its new revision.
+
+Only verified owners of active listings can edit. All fields are validated
+before saving; `422` returns the same field-error map as publishing. A missing
+revision returns `428`; a stale revision or inactive listing returns `409`.
+Missing, deleted, or other sellers' listings return `404`, and invalid sessions
+return `401`. Reload the owned detail before retrying a conflict. Concurrent
+saves with the same revision accept only one; revisions persist across restarts.
+
+Edits preserve the public ID, owner, seller display name, original posting date,
+feed order, pickup area, and photos. The app offers Edit on active items in My
+listings, Cancel without saving, and Reload listing to discard the local draft
+and retrieve current values. The additive revision migration preserves existing
+Sprint 1 records.
+
 ## Photo upload
 
 Send a bearer session and multipart file parts named `photos[]` in display

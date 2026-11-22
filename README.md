@@ -29,7 +29,10 @@ on the server before removing it from the device. If logout cannot reach the
 server, reconnect and retry. An already expired or revoked token can be removed
 locally without another successful revocation.
 
-After login, open **My listings**, then **Create listing**. Publish the details
+After login, open **My listings**, then **Create listing**. Use **Edit** on an active
+listing to update its title, description, price, category, or condition. Cancel
+leaves it unchanged; if another save or status change makes the form stale, use
+**Reload listing** to fetch the latest details before trying again. Publish the details
 and select one to five photos, or use **Add or replace photos** on an active
 item you own. Tap a selected image to make it the cover. Upload replaces the
 entire photo set; a failed upload keeps the previous set. JPEG, PNG and HEIC

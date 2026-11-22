@@ -223,4 +223,99 @@ private struct PublishBody: Content {
             #expect(entries.first?.status == .active)          // forged "sold" ignored
         }
     }
+
+    @Test func editsAreAtomicVersionedAndPreserveIdentity() async throws {
+        try await withApp(configure: { app in
+            app.middleware.use(TestUser(id: "alice"))
+            _ = try await configureApplication(app, seedListings: fixture())
+        }) { app in
+            let before = try #require(try await ListingRecord.query(on: app.db).filter(\.$listingID == "active").first())
+            let originalDate = before.createdAt
+            let originalSequence = before.id
+            let invalid = try await app.testing().sendRequest(.PATCH, "api/v1/listings/active", beforeRequest: { req in
+                req.headers.add(name: .ifMatch, value: "initial")
+                try req.content.encode(PublishBody(title: "Changed", description: "", priceCents: 0, category: "", condition: "Mint"))
+            })
+            #expect(invalid.status == .unprocessableEntity)
+            #expect(try invalid.content.decode(FieldErrorBody.self).fieldErrors.count == 4)
+            #expect(try await Catalog(database: app.db).active("active")?.title == "Desk lamp")
+            let missingVersion = try await app.testing().sendRequest(.PATCH, "api/v1/listings/active", beforeRequest: { req in
+                try req.content.encode(PublishBody())
+            })
+            #expect(missingVersion.status == .preconditionRequired)
+            let edited = try await app.testing().sendRequest(.PATCH, "api/v1/listings/active", beforeRequest: { req in
+                req.headers.add(name: .ifMatch, value: "initial")
+                try req.content.encode(PublishBody(title: "  Updated desk  ", description: "Updated description", priceCents: 1999,
+                    category: "Furniture", condition: "fair", pickupArea: "Forged pickup", sellerDisplayName: "Mallory",
+                    ownerID: "bob", id: "forged", status: "sold"))
+            })
+            #expect(edited.status == .ok)
+            let owned = try edited.content.decode(OwnedListing.self)
+            #expect(owned.revision != "initial")
+            #expect(owned.listing.title == "Updated desk")
+            #expect(owned.listing.description == "Updated description")
+            #expect(owned.listing.priceCents == 1999)
+            #expect(owned.listing.condition == "Fair")
+            #expect(owned.listing.category == "Furniture")
+            #expect(owned.listing.id == "active")
+            #expect(owned.listing.pickupArea == "Campus")
+            #expect(owned.listing.sellerDisplayName == "Same display name")
+            #expect(owned.status == .active)
+            let after = try #require(try await ListingRecord.query(on: app.db).filter(\.$listingID == "active").first())
+            #expect(after.createdAt == originalDate)
+            #expect(after.id == originalSequence)
+            #expect(after.ownerID == "alice")
+            let stale = try await app.testing().sendRequest(.PATCH, "api/v1/listings/active", beforeRequest: { req in
+                req.headers.add(name: .ifMatch, value: "initial")
+                try req.content.encode(PublishBody(title: "Stale overwrite"))
+            })
+            #expect(stale.status == .conflict)
+            #expect(try await Catalog(database: app.db).active("active")?.title == "Updated desk")
+            let reload = try await app.testing().sendRequest(.GET, "api/v1/me/listings/active")
+            #expect(try reload.content.decode(OwnedListing.self).revision == owned.revision)
+        }
+    }
+
+    @Test func editsRejectOtherOwnersAndInactiveItems() async throws {
+        try await withApp(configure: { app in
+            app.middleware.use(TestUser(id: "alice"))
+            _ = try await configureApplication(app, seedListings: fixture())
+        }) { app in
+            for (id, status) in [("other", HTTPStatus.notFound), ("missing", .notFound), ("deleted", .notFound), ("sold", .conflict), ("reserved", .conflict)] {
+                let response = try await app.testing().sendRequest(.PATCH, "api/v1/listings/\(id)", beforeRequest: { req in
+                    req.headers.add(name: .ifMatch, value: "initial")
+                    try req.content.encode(PublishBody(title: "Unauthorized change"))
+                })
+                #expect(response.status == status)
+            }
+            let records = try await ListingRecord.query(on: app.db).all()
+            #expect(records.allSatisfy { $0.title == "Desk lamp" && $0.revision == nil })
+        }
+    }
+
+    @Test func simultaneousEditsAcceptOnlyOneAndPreservePhotos() async throws {
+        try await withApp(configure: { app in
+            _ = try await configureApplication(app, seedListings: fixture())
+        }) { app in
+            let catalog = Catalog(database: app.db)
+            _ = try await catalog.replacePhotos(["/uploads/keep.jpg"], listingID: "active", ownerID: "alice")
+            let draft = try ListingDraft(CreateListingBody(title: "New title", description: "New description", priceCents: 2000,
+                category: "Home", condition: "Good", pickupArea: nil))
+            let successes = await withTaskGroup(of: Bool.self, returning: Int.self) { group in
+                for _ in 0..<2 {
+                    group.addTask {
+                        do { _ = try await catalog.edit(draft, listingID: "active", ownerID: "alice", revision: "initial"); return true }
+                        catch let failure as Abort { #expect(failure.status == .conflict); return false }
+                        catch { Issue.record("Unexpected edit failure: \(error)"); return false }
+                    }
+                }
+                var count = 0
+                for await success in group { if success { count += 1 } }
+                return count
+            }
+            #expect(successes == 1)
+            #expect(try await catalog.active("active")?.photoURLs == ["/uploads/keep.jpg"])
+        }
+    }
+
 }

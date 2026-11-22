@@ -51,6 +51,7 @@ import VaporTesting
     private func expectDenied(_ app: Application, token: String?, detailID: String = "existing") async throws {
         let paths: [(HTTPMethod, String)] = [
             (.POST, "api/v1/listings"),
+            (.PATCH, "api/v1/listings/\(detailID)"),
             (.GET, "api/v1/me/listings"),
             (.GET, "api/v1/me/listings/\(detailID)"),
             (.GET, "api/v1/auth/me")

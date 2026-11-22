@@ -8,7 +8,7 @@ export type Listing = {
   category: string; sellerDisplayName: string; pickupArea: string; photoURLs: string[];
 };
 
-export type OwnedListing = { status: 'active' | 'sold' | 'reserved' | 'deleted'; listing: Listing };
+export type OwnedListing = { status: 'active' | 'sold' | 'reserved' | 'deleted'; listing: Listing; revision: string };
 export type CreateListingBody = {
   title: string; description: string; priceCents: number;
   category: string; condition: string; pickupArea: string;
@@ -32,7 +32,8 @@ export const detail = (id: string, signal: AbortSignal) => get<Listing>(`/${enco
 
 export const photoURL = (path: string) => /^https?:\/\//.test(path) ? path : `${apiBase}${path.startsWith('/') ? '' : '/'}${path}`;
 
-async function authenticatedRequest<T>(path: string, token: string, body?: string | FormData, signal?: AbortSignal): Promise<T> {
+async function authenticatedRequest<T>(path: string, token: string, body?: string | FormData, signal?: AbortSignal,
+  edit?: { revision: string }): Promise<T> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal?.addEventListener('abort', abort);
@@ -40,8 +41,9 @@ async function authenticatedRequest<T>(path: string, token: string, body?: strin
   const timeout = setTimeout(abort, body !== undefined && typeof body !== 'string' ? 60000 : 15000);
   try {
     const response = await fetch(`${apiBase}/api/v1/${path}`, {
-      method: body === undefined ? 'GET' : 'POST', body,
-      headers: { Authorization: `Bearer ${token}`, ...(typeof body === 'string' ? { 'Content-Type': 'application/json' } : {}) },
+      method: edit ? 'PATCH' : body === undefined ? 'GET' : 'POST', body,
+      headers: { Authorization: `Bearer ${token}`, ...(typeof body === 'string' ? { 'Content-Type': 'application/json' } : {}),
+        ...(edit ? { 'If-Match': edit.revision } : {}) },
       signal: controller.signal,
     });
     const data = await response.json().catch(error => {
@@ -75,6 +77,10 @@ async function authenticatedRequest<T>(path: string, token: string, body?: strin
 
 export const myListings = (token: string, signal: AbortSignal) => authenticatedRequest<OwnedListing[]>('me/listings', token, undefined, signal);
 export const createListing = (draft: CreateListingBody, token: string) => authenticatedRequest<Listing>('listings', token, JSON.stringify(draft));
+export const myListing = (id: string, token: string, signal: AbortSignal) =>
+  authenticatedRequest<OwnedListing>(`me/listings/${encodeURIComponent(id)}`, token, undefined, signal);
+export const editListing = (id: string, draft: CreateListingBody, revision: string, token: string) =>
+  authenticatedRequest<OwnedListing>(`listings/${encodeURIComponent(id)}`, token, JSON.stringify(draft), undefined, { revision });
 
 export async function uploadPhotos(listingId: string, photos: PickedPhoto[], token: string): Promise<Listing> {
   const form = new FormData();

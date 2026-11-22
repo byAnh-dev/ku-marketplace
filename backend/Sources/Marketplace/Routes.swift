@@ -54,6 +54,26 @@ func configureRoutes(_ app: Application, catalog: Catalog) {
         }
     }
 
+    listings.grouped(SessionAuthenticator(), AuthenticatedUser.guardMiddleware()).patch(":id") { req async throws -> Response in
+        let user = try req.auth.require(AuthenticatedUser.self)
+        guard user.verified else { throw Abort(.forbidden, reason: "Verify your KU email before editing.") }
+        guard let id = req.parameters.get("id") else { throw Abort(.notFound) }
+        guard let revision = req.headers.first(name: .ifMatch), !revision.isEmpty else {
+            throw Abort(.preconditionRequired, reason: "Reload the listing before saving.")
+        }
+        do {
+            let draft = try ListingDraft(try req.content.decode(CreateListingBody.self))
+            let updated = try await catalog.edit(draft, listingID: id, ownerID: user.id, revision: revision)
+            let response = Response(status: .ok)
+            try response.content.encode(updated)
+            return response
+        } catch let failure as ListingFieldErrors {
+            let response = Response(status: .unprocessableEntity)
+            try response.content.encode(FieldErrorBody(message: "Check the highlighted fields.", fieldErrors: failure.fields))
+            return response
+        }
+    }
+
     // Upload photos for a listing the caller owns (multipart, field `photos[]`).
     // Replaces the whole set; the first file is the primary photo.
     listings.grouped(SessionAuthenticator(), AuthenticatedUser.guardMiddleware())

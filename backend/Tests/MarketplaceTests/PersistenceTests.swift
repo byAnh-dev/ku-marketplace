@@ -245,4 +245,70 @@ import VaporTesting
             #expect(try mine.content.decode([OwnedListing].self).map { $0.listing.id } == [listing.id])
         }
     }
+
+    @Test func editsSurviveRestartAndUpgradeExistingListingsWithoutChangingDates() async throws {
+        let directory = try directory()
+        defer { try? FileManager.default.removeItem(atPath: directory) }
+        let database = directory + "marketplace.sqlite"
+        var owner: LoginResponse?
+        var listingID = ""
+        var postedAt: Date?
+        var savedRevision = ""
+        // Build the Sprint 1 shape, with real accounts and listings but no revision column.
+        try await withApp(configure: { app in
+            app.databases.use(.sqlite(.file(database)), as: .sqlite)
+            app.migrations.add(CreateMarketplaceUsers())
+            app.migrations.add(CreateListings(seedRows: []))
+            try await app.autoMigrate()
+            registerAuthRoutes(app)
+            configureRoutes(app, catalog: Catalog(database: app.db))
+        }) { app in
+            let seller = try await account(app, email: "edit-upgrade@ku.edu")
+            owner = seller
+            let item = try await publish(app, title: "Original", description: "Original description", token: seller.token)
+            listingID = item.id
+            postedAt = try await ListingRecord.query(on: app.db).filter(\.$listingID == item.id).first()?.createdAt
+            try await app.db.schema(ListingRecord.schema).deleteField("revision").update()
+        }
+        let seller = try #require(owner)
+        let id = listingID
+        try await withApp(configure: { app in
+            try await configureApplication(app, databasePath: database)
+        }) { app in
+            let loaded = try await get(app, "api/v1/me/listings/\(id)", token: seller.token)
+            #expect(try loaded.content.decode(OwnedListing.self).revision == "initial")
+            let other = try await account(app, email: "edit-stranger@ku.edu")
+            for (token, expected) in [(other.token, HTTPStatus.notFound), (seller.token, .ok)] {
+                let edited = try await app.testing().sendRequest(.PATCH, "api/v1/listings/\(id)", beforeRequest: { req in
+                    req.headers.bearerAuthorization = .init(token: token)
+                    req.headers.add(name: .ifMatch, value: "initial")
+                    try req.content.encode(CreateListingBody(title: "Edited after upgrade", description: "Still persistent", priceCents: 3250,
+                        category: "Furniture", condition: "Good", pickupArea: nil))
+                })
+                #expect(edited.status == expected)
+                if expected == .ok { savedRevision = try edited.content.decode(OwnedListing.self).revision }
+            }
+        }
+        let revision = savedRevision
+        try await withApp(configure: { app in
+            try await configureApplication(app, databasePath: database)
+        }) { app in
+            let record = try #require(try await ListingRecord.query(on: app.db).filter(\.$listingID == id).first())
+            #expect(record.createdAt == postedAt)
+            #expect(record.title == "Edited after upgrade")
+            #expect(record.priceCents == 3250)
+            #expect(record.ownerID == seller.user.id.uuidString)
+            #expect(record.pickupArea == "West campus")
+            let loaded = try await get(app, "api/v1/me/listings/\(id)", token: seller.token)
+            #expect(try loaded.content.decode(OwnedListing.self).revision == revision)
+            let stale = try await app.testing().sendRequest(.PATCH, "api/v1/listings/\(id)", beforeRequest: { req in
+                req.headers.bearerAuthorization = .init(token: seller.token)
+                req.headers.add(name: .ifMatch, value: "initial")
+                try req.content.encode(CreateListingBody(title: "Old tab", description: "Stale", priceCents: 100,
+                    category: "Home", condition: "Good", pickupArea: nil))
+            })
+            #expect(stale.status == .conflict)
+        }
+    }
+
 }

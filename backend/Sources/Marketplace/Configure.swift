@@ -15,6 +15,7 @@ func configureApplication(_ app: Application, databasePath: String? = nil,
     }
     app.migrations.add(CreateMarketplaceUsers())
     app.migrations.add(CreateListings(seedRows: seedListings))
+    app.migrations.add(AddListingRevisions())
     try await app.autoMigrate()
     registerAuthRoutes(app)
     let catalog = Catalog(database: app.db)

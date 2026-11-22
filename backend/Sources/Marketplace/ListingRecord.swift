@@ -1,5 +1,6 @@
 import Fluent
 import Foundation
+import SQLKit
 
 /// Storage fields are separate from the public Listing response.
 final class ListingRecord: Model, @unchecked Sendable {
@@ -18,6 +19,7 @@ final class ListingRecord: Model, @unchecked Sendable {
     @Field(key: "pickup_area") var pickupArea: String
     @Field(key: "photo_urls") var photoURLs: [String]
     @Field(key: "created_at") var createdAt: Date
+    @OptionalField(key: "revision") var revision: String?
 
     init() {}
 
@@ -63,6 +65,7 @@ struct CreateListings: AsyncMigration {
                 .field("pickup_area", .string, .required)
                 .field("photo_urls", .json, .required)
                 .field("created_at", .datetime, .required)
+                .field("revision", .string)
                 .ignoreExisting()
                 .create()
             // Seed once as part of the migration. Reverse insertion preserves the current
@@ -79,5 +82,21 @@ struct CreateListings: AsyncMigration {
 
     func revert(on db: any Database) async throws {
         try await db.schema(ListingRecord.schema).delete()
+    }
+}
+
+/// Existing Sprint 1 databases have no revision column. Null is the initial version.
+struct AddListingRevisions: AsyncMigration {
+    func prepare(on db: any Database) async throws {
+        guard let sql = db as? any SQLDatabase else { return }
+        struct Column: Decodable { let name: String }
+        let columns = try await sql.raw("PRAGMA table_info(listings)").all(decoding: Column.self)
+        if !columns.contains(where: { $0.name == "revision" }) {
+            try await db.schema(ListingRecord.schema).field("revision", .string).update()
+        }
+    }
+
+    func revert(on db: any Database) async throws {
+        try await db.schema(ListingRecord.schema).deleteField("revision").update()
     }
 }

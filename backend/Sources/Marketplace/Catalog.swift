@@ -44,7 +44,7 @@ struct Catalog: Sendable {
             guard let status = Status(rawValue: record.status) else {
                 throw Abort(.internalServerError, reason: "Stored listing status is invalid.")
             }
-            return OwnedListing(status: status, listing: record.listing)
+            return OwnedListing(status: status, listing: record.listing, revision: record.revision ?? "initial")
         }
     }
 
@@ -52,6 +52,35 @@ struct Catalog: Sendable {
     /// taken from the authenticated account. Newest listings surface first.
     func add(_ listing: Listing, ownerID: String) async throws {
         try await ListingRecord(row: Row(ownerID: ownerID, status: .active, listing: listing)).create(on: database)
+    }
+
+    /// Take SQLite's write lock before checking the version so simultaneous saves
+    /// cannot both accept the same revision. Only editable fields are written.
+    func edit(_ draft: ListingDraft, listingID: String, ownerID: String, revision: String) async throws -> OwnedListing {
+        try await database.transaction { db in
+            try await ListingRecord.query(on: db).filter(\.$listingID == listingID)
+                .filter(\.$ownerID == ownerID).filter(\.$status == Status.active.rawValue)
+                .set(\.$status, to: Status.active.rawValue).update()
+            guard let record = try await ListingRecord.query(on: db).filter(\.$listingID == listingID)
+                .filter(\.$ownerID == ownerID).first(), record.status != Status.deleted.rawValue else {
+                throw Abort(.notFound, reason: "This listing is unavailable.")
+            }
+            guard record.status == Status.active.rawValue else {
+                throw Abort(.conflict, reason: "This listing is no longer active. Reload to see its current status.")
+            }
+            guard revision == (record.revision ?? "initial") else {
+                throw Abort(.conflict, reason: "This listing has changed. Reload before editing again.")
+            }
+            record.title = draft.title
+            record.description = draft.description
+            record.priceCents = draft.priceCents
+            record.category = draft.category
+            record.condition = draft.condition
+            let nextRevision = UUID().uuidString
+            record.revision = nextRevision
+            try await record.update(on: db)
+            return OwnedListing(status: .active, listing: record.listing, revision: nextRevision)
+        }
     }
 
     /// Replaces the photo set of an active listing the caller owns. `urls` must
@@ -88,4 +117,5 @@ struct Catalog: Sendable {
 struct OwnedListing: Content {
     let status: Catalog.Status
     let listing: Listing
+    let revision: String
 }

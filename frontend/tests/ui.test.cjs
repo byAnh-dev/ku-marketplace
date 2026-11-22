@@ -386,3 +386,90 @@ test('My listings restricts photo actions to active items and offers login after
   await press(ui, 'Log in again');
   assert.ok(control(ui, 'Log in'));
 });
+
+
+async function openEditor(t) {
+  const h = harness(token);
+  h.reply('me', 200, user);
+  const ui = await mount(t, h.App);
+  h.reply('/api/v1/me/listings', 200, [{ status: 'active', listing, revision: 'initial' }]);
+  await press(ui, 'My listings');
+  h.reply(`/api/v1/me/listings/${listing.id}`, 200, { status: 'active', listing, revision: 'initial' });
+  await press(ui, `Edit ${listing.title}`);
+  return { h, ui };
+}
+
+test('editing is populated, validates all fields, and cancel sends no save', async t => {
+  const { h, ui } = await openEditor(t);
+  assert.equal(inputValue(ui, 'Title'), listing.title);
+  assert.equal(inputValue(ui, 'Description'), listing.description);
+  assert.equal(inputValue(ui, 'Price in dollars'), '25.00');
+  assert.equal(inputValue(ui, 'Category'), listing.category);
+  assert.ok(control(ui, 'Good (selected)'));
+  for (const field of ['Title', 'Description', 'Category']) await fill(ui, field, ' ');
+  await fill(ui, 'Price in dollars', '0');
+  await press(ui, 'Save changes');
+  for (const message of ['Title is required.', 'Description is required.', 'Category is required.', 'Price must be between']) {
+    assert.ok(hasText(ui, message));
+  }
+  assert.equal(h.requests.filter(r => r.method === 'PATCH').length, 0);
+  h.reply('/api/v1/me/listings', 200, [{ status: 'active', listing, revision: 'initial' }]);
+  await press(ui, 'Cancel');
+  assert.ok(hasText(ui, listing.title));
+  assert.equal(h.requests.filter(r => r.method === 'PATCH').length, 0);
+});
+
+test('editing retains server field errors, disables duplicate saves, and refreshes My listings on success', async t => {
+  const { h, ui } = await openEditor(t);
+  await fill(ui, 'Title', 'Updated desk');
+  h.reply(`/api/v1/listings/${listing.id}`, 422, { fieldErrors: { title: 'Server title error.' } });
+  await press(ui, 'Save changes');
+  assert.ok(hasText(ui, 'Server title error.'));
+  assert.equal(inputValue(ui, 'Title'), 'Updated desk');
+  const finish = h.defer(`/api/v1/listings/${listing.id}`);
+  await press(ui, 'Save changes');
+  assert.equal(control(ui, 'Cancel').props.disabled, true);
+  assert.equal(control(ui, 'Reload listing').props.disabled, true);
+  assert.ok(ui.container.queryAll(n => n.type === 'TextInput').every(n => n.props.editable === false));
+  const updated = { status: 'active', listing: { ...listing, title: 'Updated desk' }, revision: 'v2' };
+  h.reply('/api/v1/me/listings', 200, [updated]);
+  await act(async () => finish(200, updated));
+  assert.ok(hasText(ui, 'Updated desk'));
+  const save = h.requests.filter(r => r.method === 'PATCH').at(-1);
+  assert.equal(save.headers.get('Authorization'), `Bearer ${token}`);
+  assert.equal(save.headers.get('If-Match'), 'initial');
+  assert.equal(JSON.parse(save.body).priceCents, 2500);
+  assert.equal(JSON.parse(save.body).ownerID, undefined);
+});
+
+test('stale edits require reload and use the refreshed revision on retry', async t => {
+  const { h, ui } = await openEditor(t);
+  await fill(ui, 'Title', 'My unsaved title');
+  h.reply(`/api/v1/listings/${listing.id}`, 409, { reason: 'This listing has changed. Reload before editing again.' });
+  await press(ui, 'Save changes');
+  assert.ok(hasText(ui, 'This listing has changed.'));
+  assert.equal(inputValue(ui, 'Title'), 'My unsaved title');
+  assert.equal(control(ui, 'Save changes').props.disabled, true);
+  const current = { status: 'active', listing: { ...listing, title: 'Saved elsewhere' }, revision: 'v2' };
+  h.reply(`/api/v1/me/listings/${listing.id}`, 200, current);
+  await press(ui, 'Reload listing');
+  assert.equal(inputValue(ui, 'Title'), 'Saved elsewhere');
+  assert.equal(control(ui, 'Save changes').props.disabled, false);
+  h.reply(`/api/v1/listings/${listing.id}`, 200, { ...current, revision: 'v3' });
+  h.reply('/api/v1/me/listings', 200, [current]);
+  await press(ui, 'Save changes');
+  assert.equal(h.requests.filter(r => r.method === 'PATCH').at(-1).headers.get('If-Match'), 'v2');
+});
+
+test('inactive reloads prevent editing and session expiry returns to login', async t => {
+  const { h, ui } = await openEditor(t);
+  h.reply(`/api/v1/listings/${listing.id}`, 409, { reason: 'This listing is no longer active.' });
+  await press(ui, 'Save changes');
+  h.reply(`/api/v1/me/listings/${listing.id}`, 200, { status: 'sold', listing, revision: 'v2' });
+  await press(ui, 'Reload listing');
+  assert.ok(hasText(ui, 'sold and cannot be edited'));
+  assert.equal(ui.container.queryAll(n => n.type === 'TextInput').length, 0);
+  h.reply(`/api/v1/me/listings/${listing.id}`, 401, { reason: 'Authentication required.' });
+  await press(ui, 'Reload listing');
+  assert.ok(control(ui, 'Log in'));
+});
