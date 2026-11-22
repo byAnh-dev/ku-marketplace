@@ -44,8 +44,8 @@ export const photoThumbnailURL = (path: string, width = 480) => {
   return `${url}${url.includes('?') ? '&' : '?'}width=${width}`;
 };
 
-async function authenticatedRequest<T>(path: string, token: string, body?: string | FormData, signal?: AbortSignal,
-  edit?: { revision: string; method?: 'PATCH' | 'POST' | 'DELETE' }): Promise<T> {
+export async function authenticatedRequest<T>(path: string, token: string, body?: string | FormData, signal?: AbortSignal,
+  options?: { revision?: string; method?: 'GET' | 'PATCH' | 'PUT' | 'POST' | 'DELETE'; messaging?: boolean }): Promise<T> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal?.addEventListener('abort', abort);
@@ -53,12 +53,13 @@ async function authenticatedRequest<T>(path: string, token: string, body?: strin
   const timeout = setTimeout(abort, body !== undefined && typeof body !== 'string' ? 60000 : 15000);
   try {
     const response = await fetch(`${apiBase}/api/v1/${path}`, {
-      method: edit ? edit.method ?? 'PATCH' : body === undefined ? 'GET' : 'POST', body,
+      method: options?.method ?? (options?.revision !== undefined ? 'PATCH' : body === undefined ? 'GET' : 'POST'), body,
       headers: { Authorization: `Bearer ${token}`, ...(typeof body === 'string' ? { 'Content-Type': 'application/json' } : {}),
-        ...(!edit && body === undefined ? { 'Cache-Control': 'no-cache' } : {}),
-        ...(edit ? { 'If-Match': edit.revision } : {}) },
+        ...(body === undefined && !options?.revision ? { 'Cache-Control': 'no-cache' } : {}),
+        ...(options?.revision !== undefined ? { 'If-Match': options.revision } : {}) },
       signal: controller.signal,
     });
+    if (options?.messaging && response.status === 204) return undefined as T;
     const data = await response.json().catch(error => {
       if (controller.signal.aborted) throw error;
       return null;
@@ -70,7 +71,10 @@ async function authenticatedRequest<T>(path: string, token: string, body?: strin
           if (typeof value === 'string') fieldErrors[field] = value;
         }
       }
+      const retryAfter = response.headers.get('Retry-After');
       const message = response.status === 401 ? 'Your session has expired. Please log in again.' :
+        options?.messaging ? (response.status === 429 && retryAfter ? `Try sending again in ${retryAfter} seconds.` :
+          data?.reason || 'The message request could not be completed.') :
         response.status === 403 ? 'Verify your KU email before managing listings.' :
         response.status === 404 ? 'This listing is unavailable.' :
         fieldErrors.photos || (typeof data?.reason === 'string' ? data.reason : 'The listing request could not be completed.');
