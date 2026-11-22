@@ -1,10 +1,12 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Button, FlatList, Image, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { ApiError, detail, Listing, ownedListing, photoURL, search } from './src/api';
 import { AuthScreen } from './src/AuthScreen';
 import { logout, restoreSession, Session } from './src/auth';
 import { MyListings } from './src/MyListings';
+import { InboxScreen, ThreadScreen, useMessageRefresh, type MessageScreen } from './src/MessageScreens';
+import { inbox, type Conversation } from './src/messaging';
 
 type State<T> = { phase: 'loading' } | { phase: 'error'; message: string; unavailable: boolean } | { phase: 'ready'; value: T };
 const money = (cents: number) => `$${(cents / 100).toFixed(2)}`;
@@ -37,7 +39,32 @@ function Photo({ uri }: { uri?: string }) {
     <View style={[s.photo, s.placeholder]}><Text style={s.label}>No photo</Text></View>;
 }
 
-function Details({ id, back, ownerToken }: { id: string; back: () => void; ownerToken?: string }) {
+function Details({ id, back, ownerToken, contact, token, onExpired }: { id: string; back: () => void; ownerToken?: string;
+  contact: (listing: Listing, existing?: Conversation) => void; token?: string; onExpired: () => void }) {
+  const pendingContact = useRef<AbortController | null>(null);
+  const [checking, setChecking] = useState(false);
+  const [contactError, setContactError] = useState('');
+  useEffect(() => () => { pendingContact.current?.abort(); pendingContact.current = null; }, [id, token]);
+  async function messageSeller(listing: Listing) {
+    if (!token) { contact(listing); return; }
+    if (pendingContact.current) return;
+    const request = new AbortController();
+    pendingContact.current = request;
+    setChecking(true); setContactError('');
+    try {
+      const rows = await inbox(token, request.signal);
+      if (request.signal.aborted) return;
+      const existing = rows.find(row => row.listingId === listing.id);
+      if (existing && !existing.isBuyer) setContactError('This is your listing. Open Messages to reply to buyers.');
+      else contact(listing, existing);
+    } catch (error) {
+      if (request.signal.aborted) return;
+      if (error instanceof ApiError && error.status === 401) onExpired();
+      else setContactError(error instanceof Error ? error.message : 'Could not open messages.');
+    } finally {
+      if (!request.signal.aborted) { pendingContact.current = null; setChecking(false); }
+    }
+  }
   const load = useCallback(async (listingId: string, signal: AbortSignal): Promise<{ listing: Listing; status?: string }> => {
     if (ownerToken) return ownedListing(listingId, ownerToken, signal);
     return { listing: await detail(listingId, signal) };
@@ -53,6 +80,8 @@ function Details({ id, back, ownerToken }: { id: string; back: () => void; owner
       <Text style={s.body}>{state.value.listing.description}</Text>
       <Text style={s.body}>Condition: {state.value.listing.condition}</Text>
       <Text style={s.body}>Seller: {state.value.listing.sellerDisplayName}</Text>
+      {!ownerToken && <Button title={token ? 'Message seller' : 'Log in to message seller'} disabled={checking} onPress={() => messageSeller(state.value.listing)} />}
+      {!!contactError && <Text accessibilityRole="alert">{contactError}</Text>}
       <Text style={s.body}>Pickup: {state.value.listing.pickupArea}</Text>
       <Text style={s.label}>Buyers and sellers arrange pickup and payment themselves.</Text>
     </>}
@@ -92,6 +121,7 @@ export default function App() {
   const [authOpen, setAuthOpen] = useState(false);
   const [myListingsOpen, setMyListingsOpen] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
+  const [messageScreen, setMessageScreen] = useState<MessageScreen | null>(null);
   const [restoring, setRestoring] = useState(true);
   const [restoreAttempt, setRestoreAttempt] = useState(0);
   const [restoreError, setRestoreError] = useState('');
@@ -110,25 +140,32 @@ export default function App() {
   async function signOut() {
     if (!session) return;
     setSigningOut(true); setAuthError('');
-    try { await logout(session.token); setSession(null); }
+    try { await logout(session.token); setMessageScreen(null); setSession(null); }
     catch { setAuthError('Could not finish logging out. Check your connection and try again.'); }
     finally { setSigningOut(false); }
   }
-  function sessionExpired() {
-    setSession(null); setMyListingsOpen(false); setAuthOpen(true);
-  }
+  const sessionExpired = useCallback(() => {
+    setSession(null); setMessageScreen(null); setMyListingsOpen(false); setAuthOpen(true);
+  }, []);
+  const poll = useMessageRefresh(session, sessionExpired);
   const account = restoring ? <ActivityIndicator accessibilityLabel="Restoring session" /> : restoreError ? <View>
     <Text accessibilityRole="alert" style={s.body}>{restoreError}</Text>
     <Button title="Retry session" onPress={() => setRestoreAttempt(n => n + 1)} />
   </View> : session ? <View style={{ gap: 4 }}>
     <Text style={s.body}>Signed in as {session.user.displayName}</Text>
+    <Button title={poll.counts?.total ? `Messages (${poll.counts.total} unread)` : 'Messages'} disabled={signingOut} onPress={() => setMessageScreen({ kind: 'inbox' })} />
     <Button title="My listings" disabled={signingOut} onPress={() => setMyListingsOpen(true)} />
     <Button title={signingOut ? 'Logging out...' : 'Log out'} disabled={signingOut} onPress={signOut} />
     {!!authError && <Text accessibilityRole="alert" style={s.body}>{authError}</Text>}
   </View> : <Button title="Student login / register" onPress={() => setAuthOpen(true)} />;
   return <SafeAreaView style={s.fill}><StatusBar style="dark" />
     {authOpen ? <AuthScreen onBack={() => setAuthOpen(false)} onLogin={value => { setSession(value); setAuthError(''); setAuthOpen(false); }} /> :
-      id ? <Details id={id} back={() => setId(null)} ownerToken={myListingsOpen ? session?.token : undefined} /> :
+      session && messageScreen?.kind === 'inbox' ? <InboxScreen key={session.token} session={session} poll={poll} onExpired={sessionExpired}
+        back={() => { setId(null); setMessageScreen(null); }} open={conversation => setMessageScreen({ kind: 'thread', conversation })} /> :
+      session && messageScreen && messageScreen.kind !== 'inbox' ? <ThreadScreen key={session.token} screen={messageScreen} session={session} poll={poll} onExpired={sessionExpired}
+        back={sent => setMessageScreen(sent || messageScreen.kind === 'thread' ? { kind: 'inbox' } : null)} /> :
+      id ? <Details id={id} back={() => setId(null)} ownerToken={myListingsOpen ? session?.token : undefined} token={session?.token} onExpired={sessionExpired}
+        contact={(listing, existing) => session ? setMessageScreen(existing ? { kind: 'thread', conversation: existing } : { kind: 'new', listing }) : setAuthOpen(true)} /> :
       myListingsOpen && session ? <MyListings token={session.token} onBack={() => setMyListingsOpen(false)} onViewOwned={setId}
         onOpen={listing => { setMyListingsOpen(false); setId(listing.id); }} onSessionExpired={sessionExpired} /> :
       <Market query={query} setQuery={setQuery} open={setId} account={account} />}

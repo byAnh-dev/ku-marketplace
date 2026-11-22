@@ -26,12 +26,17 @@ function harness(storedToken, clock) {
   const requests = [];
   const replies = new Map();
   const pickerResults = [];
+  const appStateListeners = new Set();
   const native = {
+    AppState: { currentState: 'active', addEventListener: (_, listener) => {
+      appStateListeners.add(listener);
+      return { remove: () => appStateListeners.delete(listener) };
+    } },
     Platform: { OS: 'ios' }, StyleSheet: { create: value => value },
     ...Object.fromEntries(['ActivityIndicator', 'Button', 'Image', 'Pressable',
       'SafeAreaView', 'KeyboardAvoidingView', 'ScrollView', 'Text', 'TextInput', 'View'].map(name => [name, name])),
-    FlatList: ({ data, renderItem, ListEmptyComponent }) => React.createElement('FlatList', null,
-      data.length ? data.map((item, index) => React.createElement(React.Fragment, { key: item.id }, renderItem({ item, index }))) : ListEmptyComponent),
+    FlatList: ({ data, renderItem, keyExtractor, ListEmptyComponent, onViewableItemsChanged }) => React.createElement('FlatList', { onViewableItemsChanged },
+      data.length ? data.map((item, index) => React.createElement(React.Fragment, { key: keyExtractor(item, index) }, renderItem({ item, index }))) : ListEmptyComponent),
   };
   const secureStore = {
     getItemAsync: async key => storage.get(key) ?? null,
@@ -43,7 +48,7 @@ function harness(storedToken, clock) {
   });
   const load = createAppLoader({
     modules: {
-      react: React, 'react/jsx-runtime': require('react/jsx-runtime'),
+      react: React, 'react/jsx-runtime': require('react/jsx-runtime'), expo: { uuid: { v4: require('node:crypto').randomUUID } },
       'react-native': native, 'expo-status-bar': { StatusBar: 'StatusBar' },
       'expo-secure-store': secureStore,
       'expo-image': { Image: 'Image' },
@@ -68,6 +73,7 @@ function harness(storedToken, clock) {
       },
     },
     globals: {
+      setInterval, clearInterval,
       ...(clock ? { Date: class extends Date { static now() { return clock.now; } },
         setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout } : {}),
       Blob, TextEncoder,
@@ -89,6 +95,7 @@ function harness(storedToken, clock) {
         }
         requests.push(request);
         const queue = replies.get(route);
+        if (!queue?.length && route === '/api/v1/me/unread') return response(200, { total: 0, threads: [] });
         if (!queue?.length && route === '/api/v1/listings' && (!options.method || options.method === 'GET')) return response(200, [listing]);
         if (!queue?.length && route === '/api/v1/listings/desk-1') return response(200, listing);
         assert.ok(queue?.length, `Unexpected request: ${route}`);
@@ -110,6 +117,10 @@ function harness(storedToken, clock) {
     PhotoPicker: load(path.resolve(__dirname, '../src/PhotoPicker.tsx')).PhotoPicker,
     api: load(path.resolve(__dirname, '../src/api.ts')),
     storage, requests,
+    changeAppState(state) {
+      native.AppState.currentState = state;
+      for (const listener of appStateListeners) listener(state);
+    },
     pick: result => pickerResults.push(result),
     reply: (route, status, body) => queue(route, response(status, body)),
     offline: route => queue(route, new Error('Network unavailable')),
@@ -196,6 +207,152 @@ test('public browsing stays available and login/logout preserve the marketplace 
   assert.equal(h.storage.size, 0);
   const logout = h.requests.find(request => request.url.endsWith('/auth/logout'));
   assert.equal(logout.headers.get('Authorization'), `Bearer ${token}`);
+});
+
+test('a lost first-send response retains the draft and retries with its original UUID', async t => {
+  const h = harness(token);
+  h.reply('me', 200, user);
+  const ui = await mount(t, h.App);
+  const card = ui.container.queryAll(node => node.type === 'Pressable').find(node => text(node).includes(listing.title));
+  await act(async () => card.props.onPress());
+  h.reply('/api/v1/conversations', 200, []);
+  await press(ui, 'Message seller');
+  await fill(ui, 'Message', 'Can we meet at Wescoe?');
+  const start = '/api/v1/listings/desk-1/conversations';
+  h.offline(start);
+  await press(ui, 'Send');
+  assert.equal(inputValue(ui, 'Message'), 'Can we meet at Wescoe?');
+  const first = JSON.parse(h.requests.find(r => r.url.endsWith(start)).body);
+  assert.match(first.clientMessageId, /^[a-f0-9-]{36}$/);
+  const message = { sequence: 51, ...first, senderId: user.id, recipientId: 'peer', senderDisplayName: user.displayName, createdAt: '2026-11-22T10:00:00Z' };
+  h.reply(start, 200, { conversationId: 'thread-1', message });
+  h.reply('/api/v1/conversations/thread-1/messages', 200, { items: [message], hasOlder: false, hasNewer: false, canMessage: true, blockedByMe: false, listingStatus: 'active' });
+  await press(ui, 'Retry send');
+  const sends = h.requests.filter(r => r.url.endsWith(start));
+  assert.equal(sends.length, 2);
+  assert.equal(sends[1].body, sends[0].body);
+  assert.equal(ui.container.queryAll(node => node.type === 'Text' && text(node) === first.body).length, 1);
+});
+
+test('opening a blocked thread retains history and marks only visible incoming sequences', async t => {
+  const h = harness(token);
+  h.reply('me', 200, user);
+  h.reply('/api/v1/me/unread', 200, { total: 2, threads: [{ conversationId: 'thread-1', unreadCount: 2 }] });
+  const ui = await mount(t, h.App);
+  const conversation = { id: 'thread-1', listingId: 'desk-1', listingTitle: 'Study desk', peerDisplayName: 'Peer', canMessage: false, blockedByMe: true, listingStatus: 'active' };
+  h.reply('/api/v1/conversations', 200, [conversation]);
+  await press(ui, 'Messages (2 unread)');
+  const incoming = { senderId: 'peer', recipientId: user.id, senderDisplayName: 'Peer', createdAt: '2026-11-22T10:00:00Z' };
+  const items = [{ ...incoming, sequence: 40, body: 'Older' }, { ...incoming, sequence: 41, body: 'Displayed' },
+    { ...incoming, sequence: 42, senderId: user.id, recipientId: 'peer', body: 'Outgoing' }];
+  const route = '/api/v1/conversations/thread-1/messages';
+  h.reply(route, 200, { ...conversation, items, hasOlder: false, hasNewer: false });
+  await press(ui, 'Study deskPeer2 unreadRead-only');
+  assert.ok(hasText(ui, 'This conversation is read-only.'));
+  assert.equal(ui.container.queryAll(n => n.type === 'TextInput').length, 0);
+  const read = '/api/v1/conversations/thread-1/read';
+  assert.equal(h.requests.filter(r => r.url.endsWith(read)).length, 0);
+  h.reply(read, 204);
+  h.reply(route, 200, { ...conversation, items: [], hasOlder: false, hasNewer: false });
+  const list = ui.container.queryAll(n => n.type === 'FlatList')[0];
+  await act(async () => list.props.onViewableItemsChanged({ viewableItems: items.slice(1).map(item => ({ item, isViewable: true })) }));
+  assert.deepEqual(JSON.parse(h.requests.find(r => r.url.endsWith(read)).body), { sequences: [41] });
+});
+
+test('Message seller reopens the buyer history and never selects a seller-owned conversation', async t => {
+  const h = harness(token);
+  h.reply('me', 200, user);
+  const ui = await mount(t, h.App);
+  const openDetail = async () => {
+    const card = ui.container.queryAll(node => node.type === 'Pressable').find(node => text(node).includes(listing.title));
+    await act(async () => card.props.onPress());
+  };
+  await openDetail();
+  const thread = { id: 'existing', listingId: listing.id, listingTitle: listing.title, peerDisplayName: 'Peer',
+    listingStatus: 'active', canMessage: true, blockedByMe: false };
+  h.reply('/api/v1/conversations', 200, [{ ...thread, isBuyer: false }]);
+  await press(ui, 'Message seller');
+  assert.ok(hasText(ui, 'This is your listing.'));
+  assert.equal(h.requests.filter(r => r.url.endsWith('/existing/messages')).length, 0);
+  h.reply('/api/v1/conversations', 200, [{ ...thread, isBuyer: true }]);
+  h.reply('/api/v1/conversations/existing/messages', 200, { ...thread, items: [{ sequence: 12, senderId: 'peer', recipientId: user.id,
+    senderDisplayName: 'Peer', body: 'The desk is still available.', createdAt: '2026-11-22T10:00:00Z' }], hasOlder: false, hasNewer: false });
+  await press(ui, 'Message seller');
+  assert.ok(hasText(ui, 'The desk is still available.'));
+  assert.equal(h.requests.filter(r => r.method === 'POST').length, 0);
+});
+
+test('a pending read preserves rapidly scrolled messages, retries failures and skips background-only rows', async t => {
+  const h = harness(token);
+  h.reply('me', 200, user);
+  const ui = await mount(t, h.App);
+  const thread = { id: 'existing', listingId: listing.id, listingTitle: 'Study desk', peerDisplayName: 'Peer',
+    listingStatus: 'active', canMessage: true, blockedByMe: false, isBuyer: true };
+  const messages = Array.from({ length: 104 }, (_, i) => ({ sequence: i + 1, senderId: 'peer', recipientId: user.id,
+    senderDisplayName: 'Peer', body: String(i + 1), createdAt: '2026-11-22T10:00:00Z' }));
+  const route = '/api/v1/conversations/existing/messages';
+  const page = { ...thread, hasOlder: false, hasNewer: false };
+  const read = '/api/v1/conversations/existing/read';
+  const batches = () => h.requests.filter(r => r.url.endsWith(read)).map(r => JSON.parse(r.body).sequences);
+  h.reply('/api/v1/conversations', 200, [thread]);
+  await press(ui, 'Messages');
+  h.reply(route, 200, { ...page, items: messages });
+  await press(ui, 'Study deskPeer');
+  const view = items => ui.container.queryAll(n => n.type === 'FlatList')[0].props
+    .onViewableItemsChanged({ viewableItems: items.map(item => ({ item, isViewable: true })) });
+  const finishFirst = h.defer(read);
+  await act(async () => view(messages.slice(0, 1)));
+  await act(async () => { view(messages.slice(1, 102)); view([]); });
+  assert.deepEqual(batches(), [[1]]);
+  h.offline(read);
+  h.reply(route, 200, { ...page, items: [] });
+  await act(async () => finishFirst(204));
+  const nextHundred = messages.slice(1, 101).map(row => row.sequence);
+  assert.deepEqual(batches(), [[1], nextHundred]);
+  await act(async () => h.changeAppState('background'));
+  await act(async () => { view(messages.slice(102, 103)); view(messages.slice(103)); });
+  assert.equal(batches().length, 2);
+  h.reply(read, 204); h.reply(read, 204);
+  for (let i = 0; i < 3; i++) h.reply(route, 200, { ...page, items: [] });
+  await act(async () => h.changeAppState('active'));
+  assert.deepEqual(batches(), [[1], nextHundred, nextHundred, [102, 104]]);
+});
+
+test('displayed receipts drain after leaving a thread and a stale receipt cannot sign out the next account', async t => {
+  const h = harness(token);
+  h.reply('me', 200, user);
+  const ui = await mount(t, h.App);
+  const thread = { id: 'thread-1', listingId: listing.id, listingTitle: 'Study desk', peerDisplayName: 'Peer',
+    listingStatus: 'active', canMessage: true, blockedByMe: false, isBuyer: true };
+  const items = [11, 12].map(sequence => ({ sequence, senderId: 'peer', recipientId: user.id, senderDisplayName: 'Peer',
+    body: String(sequence), createdAt: '2026-11-22T10:00:00Z' }));
+  h.reply('/api/v1/conversations', 200, [thread]);
+  await press(ui, 'Messages');
+  h.reply('/api/v1/conversations/thread-1/messages', 200, { ...thread, items, hasNewer: false, hasOlder: false });
+  await press(ui, 'Study deskPeer');
+  const read = '/api/v1/conversations/thread-1/read';
+  const first = h.defer(read), second = h.defer(read);
+  const view = ui.container.queryAll(n => n.type === 'FlatList')[0].props.onViewableItemsChanged;
+  await act(async () => view({ viewableItems: [{ item: items[0], isViewable: true }] }));
+  await act(async () => view({ viewableItems: [{ item: items[1], isViewable: true }] }));
+  h.reply('/api/v1/conversations', 200, [thread]);
+  await press(ui, 'Back to messages');
+  h.reply('/api/v1/conversations', 200, [thread]);
+  await act(async () => first(204));
+  const reads = h.requests.filter(r => r.url.endsWith(read));
+  assert.deepEqual(reads.map(r => JSON.parse(r.body).sequences), [[11], [12]]);
+  assert.ok(reads.every(r => r.headers.get('Authorization') === 'Bearer ' + token));
+  await press(ui, 'Back to marketplace');
+  h.reply('logout', 204);
+  await press(ui, 'Log out');
+  await press(ui, 'Student login / register');
+  await fill(ui, 'KU email', 'second@ku.edu');
+  await fill(ui, 'Password', 'long-password');
+  h.reply('login', 200, { token: 'C'.repeat(72), user: { ...user, id: 'different-id', email: 'second@ku.edu', displayName: 'Second' } });
+  await press(ui, 'Log in');
+  await act(async () => second(401, { reason: 'Session expired' }));
+  assert.ok(hasText(ui, 'Signed in as Second'));
+  assert.equal(h.requests.filter(r => r.url.endsWith(read)).length, 2);
 });
 
 test('registration validates KU email, matching passwords, and UTF-8 bytes before showing verification instructions', async t => {
