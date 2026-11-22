@@ -359,6 +359,44 @@ test('owned listing requests use bearer authentication and relative photo URLs u
   assert.equal(h.api.photoURL('https://images.example/image.jpg'), 'https://images.example/image.jpg');
 });
 
+async function startListing(t) {
+  const h = harness(token);
+  h.reply('me', 200, user);
+  const ui = await mount(t, h.App);
+  h.reply('/api/v1/me/listings', 200, []);
+  await press(ui, 'My listings');
+  assert.ok(hasText(ui, 'You have no listings yet.'));
+  await press(ui, 'Create listing');
+  return { h, ui };
+}
+
+async function fillListing(ui) {
+  await fill(ui, 'Title', listing.title);
+  await fill(ui, 'Description', listing.description);
+  await fill(ui, 'Price in dollars', '25.00');
+  await fill(ui, 'Category', listing.category);
+}
+
+const writes = h => h.requests.filter(request => request.method === 'POST');
+
+test('invalid listing fields show local feedback without a publish request', async t => {
+  const { h, ui } = await startListing(t);
+  await fillListing(ui);
+  for (const [label, invalid, valid] of [
+    ['Title', '   ', listing.title],
+    ['Description', '', listing.description],
+    ['Category', '  ', listing.category],
+    ['Price in dollars', '1.235', '25.00'],
+    ['Price in dollars', '0', '25.00'],
+  ]) {
+    await fill(ui, label, invalid);
+    await press(ui, 'Publish and add photos');
+    assert.equal(writes(h).length, 0, `Invalid ${label} reached the server`);
+    assert.ok(ui.container.queryAll(node => node.type === 'Text' && node.props.accessibilityRole === 'alert').length);
+    await fill(ui, label, valid);
+  }
+});
+
 test('signed-in users can create an item, upload its photo, and open refreshed public details', async t => {
   const h = harness(token);
   h.reply('me', 200, user);

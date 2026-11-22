@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Button, Image, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { ApiError, createListing, Listing, myListings, OwnedListing, photoThumbnailURL } from './api';
+import { ApiError, createListing, CreateListingBody, Listing, myListings, OwnedListing, photoThumbnailURL } from './api';
 import { AddPhotos } from './PhotoPicker';
 
 type Props = {
@@ -58,6 +58,27 @@ export function MyListings({ token, onBack, onOpen, onSessionExpired }: Props) {
   </ScrollView>;
 }
 
+const conditions = ['New', 'Like new', 'Good', 'Fair', 'Poor'];
+
+function listingErrors(draft: CreateListingBody, price: string): Record<string, string> {
+  const errors: Record<string, string> = {};
+  function checkText(field: 'title' | 'description' | 'category' | 'pickupArea', label: string, max: number) {
+    if (!draft[field] && field !== 'pickupArea') errors[field] = `${label} is required.`;
+    else if (draft[field].length > max) errors[field] = `${label} must be ${max} characters or fewer.`;
+  }
+  checkText('title', 'Title', 120);
+  checkText('description', 'Description', 2000);
+  checkText('category', 'Category', 50);
+  checkText('pickupArea', 'Pickup area', 80);
+  if (!conditions.includes(draft.condition)) errors.condition = 'Choose a condition.';
+  if (!price) errors.priceCents = 'Price is required.';
+  else if (!/^\d+(\.\d{1,2})?$/.test(price)) errors.priceCents = 'Enter a price in dollars with up to two decimal places.';
+  else if (!Number.isSafeInteger(draft.priceCents) || draft.priceCents < 1 || draft.priceCents > 10_000_000) {
+    errors.priceCents = 'Price must be between $0.01 and $100,000.00.';
+  }
+  return errors;
+}
+
 function CreateListing({ token, onBack, onCreated, onSessionExpired }: {
   token: string; onBack: () => void; onCreated: (listing: Listing) => void; onSessionExpired: () => void;
 }) {
@@ -74,19 +95,18 @@ function CreateListing({ token, onBack, onCreated, onSessionExpired }: {
 
   async function publish() {
     if (inFlight.current) return;
-    setError(''); setFields({});
-    if (!/^\d+(\.\d{1,2})?$/.test(price.trim())) {
-      setFields({ priceCents: 'Enter a price in dollars with up to two decimal places.' }); return;
-    }
-    const [dollars, cents = ''] = price.trim().split('.');
-    const priceCents = Number(dollars) * 100 + Number(cents.padEnd(2, '0'));
-    if (!Number.isSafeInteger(priceCents) || priceCents < 1 || priceCents > 10_000_000) {
-      setFields({ priceCents: 'Price must be between $0.01 and $100,000.00.' }); return;
-    }
+    const priceText = price.trim();
+    const [dollars, cents = ''] = priceText.split('.');
+    const draft = {
+      title: title.trim(), description: description.trim(), category: category.trim(), condition,
+      priceCents: Number(dollars) * 100 + Number(cents.padEnd(2, '0')), pickupArea: pickupArea.trim(),
+    };
+    const errors = listingErrors(draft, priceText);
+    setError(''); setFields(errors);
+    if (Object.keys(errors).length > 0) return;
     inFlight.current = true; setBusy(true);
     try {
-      onCreated(await createListing({ title: title.trim(), description: description.trim(), priceCents,
-        category: category.trim(), condition, pickupArea: pickupArea.trim() }, token));
+      onCreated(await createListing(draft, token));
     } catch (failure) {
       if (failure instanceof ApiError && failure.status === 401) { onSessionExpired(); return; }
       if (failure instanceof ApiError) setFields(failure.fieldErrors);
@@ -105,7 +125,7 @@ function CreateListing({ token, onBack, onCreated, onSessionExpired }: {
     <TextInput style={s.input} editable={!busy} accessibilityLabel="Price in dollars" placeholder="Price in dollars" value={price} onChangeText={setPrice} keyboardType="decimal-pad" />
     <TextInput style={s.input} editable={!busy} accessibilityLabel="Category" placeholder="Category" value={category} onChangeText={setCategory} maxLength={50} />
     <Text style={s.body}>Condition</Text>
-    <View style={s.conditions}>{['New', 'Like new', 'Good', 'Fair', 'Poor'].map(value =>
+    <View style={s.conditions}>{conditions.map(value =>
       <Button key={value} title={value === condition ? `${value} (selected)` : value} disabled={busy} onPress={() => setCondition(value)} />)}</View>
     <TextInput style={s.input} editable={!busy} accessibilityLabel="Pickup area" placeholder="Pickup area, defaults to Campus" value={pickupArea} onChangeText={setPickupArea} maxLength={80} />
     {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
