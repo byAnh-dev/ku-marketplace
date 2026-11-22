@@ -4,6 +4,19 @@ This backend supports accounts, sessions, publishing, My Listings and public
 search. Accounts, credentials, listings and ordered photo links persist in
 SQLite. Uploaded image bytes live in the separate upload directory.
 
+## Required environment
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_PATH` | SQLite file, default `marketplace.sqlite` |
+| `PRIVATE_MESSAGE_KEY_BASE64` | 32 random bytes, base64. Private messages are encrypted at rest; without it the messaging routes return `500 Internal Server Error` |
+| `DEV_EMAIL_VERIFICATION` | `true` logs the verification link instead of sending mail |
+| `RESEND_API_KEY` + `VERIFICATION_FROM_EMAIL` | real verification delivery |
+| `DEPLOYED_HTTPS` | `true` adds HSTS once a deployment enforces HTTPS |
+
+Generate the message key with `openssl rand -base64 32`. The CI test stage sets a
+fixture key; a local compose run needs one in the environment or `.env`.
+
 ## Public feed
 
 `GET /api/v1/listings` and `GET /api/v1/listings/:id` read the SQLite catalog.
