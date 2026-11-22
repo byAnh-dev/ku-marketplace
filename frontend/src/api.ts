@@ -23,7 +23,7 @@ export class ApiError extends Error {
 }
 
 async function get<T>(path: string, signal: AbortSignal): Promise<{ value: T; headers: Headers }> {
-  const response = await fetch(`${apiBase}/api/v1/listings${path}`, { signal });
+  const response = await fetch(`${apiBase}/api/v1/listings${path}`, { headers: { 'Cache-Control': 'no-cache' }, signal });
   if (!response.ok) throw new ApiError(response.status, response.status === 404 ? 'This listing is unavailable.' : 'The marketplace could not load.');
   return { value: await response.json(), headers: response.headers };
 }
@@ -39,6 +39,10 @@ export async function detail(id: string, signal: AbortSignal): Promise<Listing> 
 }
 
 export const photoURL = (path: string) => /^https?:\/\//.test(path) ? path : `${apiBase}${path.startsWith('/') ? '' : '/'}${path}`;
+export const photoThumbnailURL = (path: string, width = 480) => {
+  const url = photoURL(path);
+  return `${url}${url.includes('?') ? '&' : '?'}width=${width}`;
+};
 
 async function authenticatedRequest<T>(path: string, token: string, body?: string | FormData, signal?: AbortSignal): Promise<T> {
   const controller = new AbortController();
@@ -49,7 +53,8 @@ async function authenticatedRequest<T>(path: string, token: string, body?: strin
   try {
     const response = await fetch(`${apiBase}/api/v1/${path}`, {
       method: body === undefined ? 'GET' : 'POST', body,
-      headers: { Authorization: `Bearer ${token}`, ...(typeof body === 'string' ? { 'Content-Type': 'application/json' } : {}) },
+      headers: { Authorization: `Bearer ${token}`, ...(typeof body === 'string' ? { 'Content-Type': 'application/json' } : {}),
+        ...(body === undefined ? { 'Cache-Control': 'no-cache' } : {}) },
       signal: controller.signal,
     });
     const data = await response.json().catch(error => {

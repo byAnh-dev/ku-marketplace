@@ -13,7 +13,7 @@ async function request(path: string, body?: object, token?: string): Promise<Acc
     const response = await fetch(`${apiBase}/api/v1/auth/${path}`, {
       method: body === undefined ? 'GET' : 'POST',
       headers: {
-        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+        ...(body === undefined ? { 'Cache-Control': 'no-cache' } : { 'Content-Type': 'application/json' }),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: body === undefined ? undefined : JSON.stringify(body),

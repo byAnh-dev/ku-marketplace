@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Button, Image, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { ApiError, createListing, Listing, myListings, OwnedListing, photoURL } from './api';
+import { ApiError, createListing, Listing, myListings, OwnedListing, photoThumbnailURL } from './api';
 import { AddPhotos } from './PhotoPicker';
 
 type Props = {
@@ -49,7 +49,7 @@ export function MyListings({ token, onBack, onOpen, onSessionExpired }: Props) {
           <Text style={s.title}>{listing.title}</Text>
           <Text style={s.body}>{status} · ${(listing.priceCents / 100).toFixed(2)}</Text>
           {!!listing.photoURLs[0] && <Image accessibilityLabel={`Cover photo for ${listing.title}`}
-            source={{ uri: photoURL(listing.photoURLs[0]) }} style={s.photo} />}
+            source={{ uri: photoThumbnailURL(listing.photoURLs[0]) }} style={s.photo} />}
           {status === 'active' && <>
             <Button title={`View ${listing.title}`} onPress={() => onOpen(listing)} />
             <Button title={`Add or replace photos for ${listing.title}`} onPress={() => setSelected(listing)} />

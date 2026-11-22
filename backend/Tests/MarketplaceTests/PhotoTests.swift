@@ -120,6 +120,37 @@ import VaporTesting
         }
     }
 
+    @Test func photoDeliverySupportsCachedThumbnailsWithoutChangingOriginals() async throws {
+        try await withPhotoApp { app, _, _ in
+            let (_, token) = try await account(app, email: "delivery@ku.edu")
+            let listing = try await publish(app, token: token)
+            let uploaded = try await upload(app, id: listing.id, files: [Self.png], token: token)
+            let url = try #require(uploaded.content.decode(Listing.self).photoURLs.first)
+
+            for path in ["api/v1/listings", "api/v1/listings/" + listing.id, "api/v1/me/listings", "api/v1/auth/me"] {
+                let json = try await app.testing().sendRequest(.GET, path, beforeRequest: { request in
+                    request.headers.bearerAuthorization = .init(token: token)
+                })
+                #expect(json.status == .ok)
+                #expect(json.headers.first(name: .cacheControl) == "no-store")
+            }
+
+            let original = try await app.testing().sendRequest(.GET, String(url.dropFirst()))
+            #expect(original.status == .ok)
+            #expect(original.headers.first(name: .cacheControl) == "public, max-age=31536000, immutable")
+            #expect(original.body.readableBytes > 0)
+
+            let thumbnail = try await app.testing().sendRequest(.GET, String(url.dropFirst()) + "?width=64")
+            #expect(thumbnail.status == .ok)
+            #expect(thumbnail.headers.contentType == .jpeg)
+            #expect(thumbnail.headers.first(name: .cacheControl) == "public, max-age=31536000, immutable")
+            #expect(Array(thumbnail.body.readableBytesView).starts(with: [0xff, 0xd8, 0xff]))
+
+            #expect(try await app.testing().sendRequest(.GET, String(url.dropFirst()) + "?width=32").status == .badRequest)
+            #expect(try await app.testing().sendRequest(.GET, String(url.dropFirst()) + "?width=2048").status == .badRequest)
+        }
+    }
+
     @Test func unauthorizedAndInvalidUploadsPreserveExistingPhotos() async throws {
         let ownerID = UUID()
         let sold = Listing(id: "sold", title: "Sold desk", description: "Already sold.", priceCents: 2500,

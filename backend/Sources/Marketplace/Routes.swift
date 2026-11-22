@@ -11,6 +11,7 @@ struct AuthenticatedUser: Authenticatable, Sendable {
 }
 
 func configureRoutes(_ app: Application, catalog: Catalog) {
+    app.middleware.use(PhotoDeliveryMiddleware(publicDirectory: app.directory.publicDirectory))
     // Uploaded versions are immutable; replacing a set changes the listing's URLs.
     app.middleware.use(FileMiddleware(publicDirectory: app.directory.publicDirectory))
     let photoStorage = PhotoStorage(publicDirectory: app.directory.publicDirectory)
