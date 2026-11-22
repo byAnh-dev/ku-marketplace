@@ -35,11 +35,13 @@ on the server before removing it from the device. If logout cannot reach the
 server, reconnect and retry. An already expired or revoked token can be removed
 locally without another successful revocation.
 
-After login, open **My listings**, then **Create listing**. Publish the details
-and select one to five photos, or use **Add or replace photos** on an active
-item you own. Tap a selected image to make it the cover. Upload replaces the
-entire photo set; a failed upload keeps the previous set. JPEG, PNG and HEIC
-are accepted, up to 8 MiB and 20 megapixels each. HEIC becomes JPEG for display.
+After login, open **My listings**, then **Create listing**. Enter the details and
+choose up to five optional photos. Preview or remove photos and tap a photo to
+make it the cover before selecting **Publish listing**. You can publish with no
+photos. If a selected photo is rejected, the form keeps your draft for correction.
+Later, **Add or replace photos** replaces an active item's entire photo set.
+JPEG, PNG and HEIC are accepted, up to 8 MiB and 20 megapixels each. HEIC becomes
+JPEG for display.
 
 Run `npm test` in `frontend/` for the client protocol and rendered component
 tests. These run the real React components and account client with substituted

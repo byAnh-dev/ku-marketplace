@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { ActivityIndicator, Button, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { File } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { ApiError, Listing, PickedPhoto, uploadPhotos } from './api';
 
@@ -37,7 +38,7 @@ export function PhotoPicker({ photos, onChange, disabled = false, onPickingChang
         seen.add(asset.uri); return true;
       });
       const fitting = fresh.filter(asset => !asset.fileSize || asset.fileSize <= MAX_BYTES);
-      const added = fitting.slice(0, remaining).map(asset => ({ uri: asset.uri, mimeType: asset.mimeType }));
+      const added = fitting.slice(0, remaining).map(asset => ({ uri: asset.uri }));
       if (fitting.length < fresh.length) setNotice('Photos larger than 8 MB were skipped.');
       else if (added.length < fitting.length) setNotice(`Only ${MAX_PHOTOS} photos can be added.`);
       onChange([...photos, ...added]);
@@ -79,10 +80,7 @@ export function PhotoPicker({ photos, onChange, disabled = false, onPickingChang
   </View>;
 }
 
-/**
- * Step after publishing: the create-listing form opens this with the new
- * listing's id (from the 201 body) and gets the updated listing back.
- */
+/** Replace the photo set on an existing listing. */
 export function AddPhotos({ listingId, token, onDone, onBack, onSessionExpired }: {
   listingId: string; token: string; onDone: (listing: Listing) => void;
   onBack: () => void; onSessionExpired: () => void;
@@ -99,7 +97,8 @@ export function AddPhotos({ listingId, token, onDone, onBack, onSessionExpired }
     setUploading(true);
     setError(null);
     try {
-      onDone(await uploadPhotos(listingId, photos, token));
+      const files = photos.map(photo => new File(photo.uri));
+      onDone(await uploadPhotos(listingId, files, token));
     } catch (failure) {
       if (failure instanceof ApiError && failure.status === 401) { onSessionExpired(); return; }
       setError(failure instanceof Error ? failure.message : 'Photos could not be uploaded.');

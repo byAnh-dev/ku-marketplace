@@ -51,6 +51,15 @@ struct PhotoUpload: Sendable {
 struct PhotoStorage: Sendable {
     let publicDirectory: String
 
+    /// Files are ready before the first public listing row is inserted.
+    func prepareForPublish(_ photos: [File], listingID: String, on req: Request) async throws -> [String] {
+        guard !photos.isEmpty else { return [] }
+        return try await req.application.threadPool.runIfActive(eventLoop: req.eventLoop) {
+            let upload = try PhotoUpload(PhotoUploadBody(photos: photos))
+            return try self.store(listingID: listingID, upload: upload)
+        }.get()
+    }
+
     func replace(listingID: String, ownerID: String, with upload: PhotoUpload,
                  catalog: Catalog, on req: Request) async throws -> Listing {
         let urls = try await req.application.threadPool.runIfActive(eventLoop: req.eventLoop) {
@@ -64,17 +73,20 @@ struct PhotoStorage: Sendable {
             replacement = saved
         } catch {
             // The database still references the old set. Remove only this failed upload.
-            try? await req.application.threadPool.runIfActive(eventLoop: req.eventLoop) {
-                self.removeGenerations(urls, listingID: listingID, logger: req.logger)
-            }.get()
+            await discard(urls, listingID: listingID, on: req)
             throw error
         }
         // The database transaction has committed. Cleanup failure must not undo or
         // report failure for a successfully published replacement.
-        try? await req.application.threadPool.runIfActive(eventLoop: req.eventLoop) {
-            self.removeGenerations(replacement.previousPhotoURLs, listingID: listingID, logger: req.logger)
-        }.get()
+        await discard(replacement.previousPhotoURLs, listingID: listingID, on: req)
         return replacement.listing
+    }
+
+    func discard(_ urls: [String], listingID: String, on req: Request) async {
+        guard !urls.isEmpty else { return }
+        try? await req.application.threadPool.runIfActive(eventLoop: req.eventLoop) {
+            self.removeGenerations(urls, listingID: listingID, logger: req.logger)
+        }.get()
     }
 
     private func store(listingID: String, upload: PhotoUpload) throws -> [String] {

@@ -46,6 +46,16 @@ function harness(storedToken, clock) {
       react: React, 'react/jsx-runtime': require('react/jsx-runtime'),
       'react-native': native, 'expo-status-bar': { StatusBar: 'StatusBar' },
       'expo-secure-store': secureStore,
+      'expo-file-system': {
+        File: class {
+          constructor(uri) {
+            this.uri = uri;
+            this.name = new URL(uri).pathname.split('/').at(-1);
+            this.type = this.name.endsWith('.png') ? 'image/png' : 'image/jpeg';
+          }
+          async bytes() { return new TextEncoder().encode(this.uri); }
+        },
+      },
       'expo-image-picker': {
         launchImageLibraryAsync: async () => {
           assert.ok(pickerResults.length, 'Queue a device picker result first');
@@ -58,13 +68,24 @@ function harness(storedToken, clock) {
     globals: {
       ...(clock ? { Date: class extends Date { static now() { return clock.now; } },
         setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout } : {}),
+      Blob, TextEncoder,
       FormData: class {
         parts = [];
         append(name, value) { this.parts.push({ name, value }); }
+        *entries() { for (const { name, value } of this.parts) yield [name, value]; }
       },
       fetch: async (url, options = {}) => {
         const route = new URL(url).pathname;
-        requests.push({ url: String(url), ...options, headers: new Headers(options.headers) });
+        const request = { url: String(url), ...options, headers: new Headers(options.headers) };
+        if (options.body?.entries) {
+          const { convertFormDataAsync } = load(path.join(path.dirname(require.resolve('expo/package.json')),
+            'src/winter/fetch/convertFormData.ts'));
+          const { body, boundary } = await convertFormDataAsync(options.body);
+          request.multipart = await new Response(body, {
+            headers: { 'Content-Type': 'multipart/form-data; boundary=' + boundary },
+          }).formData();
+        }
+        requests.push(request);
         const queue = replies.get(route);
         if (!queue?.length && route === '/api/v1/listings' && (!options.method || options.method === 'GET')) return response(200, [listing]);
         if (!queue?.length && route === '/api/v1/listings/desk-1') return response(200, listing);
@@ -327,8 +348,9 @@ test('photo selection preserves order, handles library errors, and sends the ses
     assert.equal(request.method, 'POST');
     assert.equal(request.headers.get('Authorization'), `Bearer ${token}`);
     assert.equal(request.headers.has('Content-Type'), false, 'Native fetch must set the multipart boundary');
-    assert.equal(request.body.parts.map(part => part.name).join(','), 'photos[],photos[]');
-    assert.equal(request.body.parts.map(part => part.value.uri).join(','), 'file:///second.jpg,file:///first.png');
+    const files = request.multipart.getAll('photos[]');
+    assert.deepEqual(files.map(file => file.type), ['image/jpeg', 'image/png']);
+    assert.deepEqual(await Promise.all(files.map(file => file.text())), ['file:///second.jpg', 'file:///first.png']);
   }
 });
 
@@ -390,40 +412,78 @@ test('invalid listing fields show local feedback without a publish request', asy
     ['Price in dollars', '0', '25.00'],
   ]) {
     await fill(ui, label, invalid);
-    await press(ui, 'Publish and add photos');
+    await press(ui, 'Publish listing');
     assert.equal(writes(h).length, 0, `Invalid ${label} reached the server`);
     assert.ok(ui.container.queryAll(node => node.type === 'Text' && node.props.accessibilityRole === 'alert').length);
     await fill(ui, label, valid);
   }
 });
 
-test('signed-in users can create an item, upload its photo, and open refreshed public details', async t => {
-  const h = harness(token);
-  h.reply('me', 200, user);
-  const ui = await mount(t, h.App);
-  h.reply('/api/v1/me/listings', 200, []);
-  await press(ui, 'My listings');
-  assert.ok(hasText(ui, 'You have no listings yet.'));
-  await press(ui, 'Create listing');
-  await fill(ui, 'Title', listing.title);
-  await fill(ui, 'Description', listing.description);
-  await fill(ui, 'Price in dollars', '25.00');
-  await fill(ui, 'Category', listing.category);
+test('a valid listing with zero photos publishes directly and opens public details', async t => {
+  const { h, ui } = await startListing(t);
+  await fillListing(ui);
   h.reply('/api/v1/listings', 201, listing);
-  await press(ui, 'Publish and add photos');
-  const publish = h.requests.find(request => request.method === 'POST' && request.url.endsWith('/listings'));
+  await press(ui, 'Publish listing');
+  const [publish] = writes(h);
+  assert.equal(writes(h).length, 1);
+  assert.equal(new URL(publish.url).pathname, '/api/v1/listings');
   assert.equal(publish.headers.get('Authorization'), `Bearer ${token}`);
+  assert.equal(publish.headers.get('Content-Type'), 'application/json');
   assert.equal(JSON.parse(publish.body).priceCents, 2500);
   assert.equal(JSON.parse(publish.body).ownerID, undefined);
-  h.pick({ canceled: false, assets: [{ uri: 'file:///cover.png', mimeType: 'image/png', fileSize: 100 }] });
+  assert.ok(hasText(ui, listing.description));
+  assert.ok(hasText(ui, 'No photo'));
+});
+
+test('a seller can preview, reorder and remove images and retry a rejected publish with the draft intact', async t => {
+  const { h, ui } = await startListing(t);
+  await fillListing(ui);
+  let finishPicking;
+  h.pick(new Promise(resolve => { finishPicking = resolve; }));
   await press(ui, 'Add photos');
-  const updated = { ...listing, photoURLs: ['/uploads/listings/desk-1/version/0.png'] };
-  h.reply(`/api/v1/listings/${listing.id}/photos`, 200, updated);
+  assert.equal(control(ui, 'Publish listing').props.disabled, true);
+  await act(async () => { finishPicking({ canceled: false, assets: [
+    { uri: 'file:///desk.png', fileSize: 100 }, { uri: 'file:///discard.png', fileSize: 100 },
+    { uri: 'file:///cover.jpg', fileSize: 100 },
+  ] }); });
+  await press(ui, 'Remove photo 2');
+  await press(ui, 'Photo 2, make primary');
+  assert.equal(control(ui, 'Primary photo').children[0].props.source.uri, 'file:///cover.jpg');
+  assert.equal(writes(h).length, 0, 'Editing a draft must leave the marketplace unchanged');
+  h.reply('/api/v1/listings', 422, { fieldErrors: { photos: 'Photo is corrupt.' } });
+  await press(ui, 'Publish listing');
+  assert.ok(hasText(ui, 'Photo is corrupt.'));
+  assert.equal(inputValue(ui, 'Title'), listing.title);
+  assert.ok(hasText(ui, '2/5'));
+  const updated = { ...listing, photoURLs: ['/uploads/cover.jpg', '/uploads/desk.png'] };
+  h.reply('/api/v1/listings', 201, updated);
   h.reply(`/api/v1/listings/${listing.id}`, 200, updated);
-  await press(ui, 'Upload photos');
+  await press(ui, 'Publish listing');
+  assert.equal(writes(h).length, 2, 'One publish request per attempt');
+  for (const publish of writes(h)) {
+    assert.equal(new URL(publish.url).pathname, '/api/v1/listings');
+    assert.equal(publish.headers.get('Authorization'), `Bearer ${token}`);
+    assert.equal(publish.headers.has('Content-Type'), false, 'Fetch supplies the multipart boundary');
+    const draft = JSON.parse(publish.multipart.get('listing'));
+    assert.equal(draft.title, listing.title);
+    assert.equal(draft.priceCents, 2500);
+    const photos = publish.multipart.getAll('photos[]');
+    assert.deepEqual(await Promise.all(photos.map(file => file.text())), ['file:///cover.jpg', 'file:///desk.png']);
+  }
   assert.ok(hasText(ui, listing.description));
   assert.ok(ui.container.queryAll(node => node.type === 'Image').some(node =>
     node.props.source.uri === `http://marketplace.test:8080${updated.photoURLs[0]}`));
+});
+
+test('leaving a listing draft with selected photos creates no listing or upload', async t => {
+  const { h, ui } = await startListing(t);
+  await fillListing(ui);
+  h.pick({ canceled: false, assets: [{ uri: 'file:///draft.jpg', fileSize: 100 }] });
+  await press(ui, 'Add photos');
+  h.reply('/api/v1/me/listings', 200, []);
+  await press(ui, 'Back to my listings');
+  assert.equal(writes(h).length, 0);
+  assert.ok(control(ui, 'Create listing'));
 });
 
 test('My listings restricts photo actions to active items and offers login after session expiry', async t => {

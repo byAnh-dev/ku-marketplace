@@ -57,8 +57,10 @@ stable account ID, never a display name. Owner IDs are not exposed publicly.
 
 ## Publish contract
 
-`POST /api/v1/listings` takes JSON. Only these fields are read; the id, seller,
-and status are server-owned:
+`POST /api/v1/listings` accepts JSON when the seller publishes without photos.
+To publish with photos, send a multipart form containing a `listing` text
+part with the same JSON and one to five `photos[]` file parts in display order.
+Both formats use the following fields. The server assigns the ID, seller and status.
 
 | Field | Rule |
 | --- | --- |
@@ -78,9 +80,11 @@ and status are server-owned:
 
 `401` means the session is missing, invalid, expired, revoked, or belongs to an
 unverified account. Login itself returns `403` for an unverified account.
-A `201` returns the created listing with its server-minted
-`id`, so navigate with `Location` or the body `id`. Photos are attached by the
-photo-upload endpoint; `photoURLs` is empty at creation.
+A `201` returns the created listing with its server-minted `id` and ordered
+`photoURLs`. The server validates the fields and prepares all selected photos
+before inserting the public listing. A rejected photo or unsuccessful storage
+operation leaves the listing unpublished. A photo-free listing has an empty
+`photoURLs` array. Sellers can use the photo-upload endpoint to update photos later.
 
 The frontend form must mirror these rules for instant feedback. The server
 stays authoritative: never send `sellerDisplayName`, `ownerID`, `id`, or

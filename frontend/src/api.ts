@@ -14,7 +14,7 @@ export type CreateListingBody = {
   title: string; description: string; priceCents: number;
   category: string; condition: string; pickupArea: string;
 };
-export type PickedPhoto = { uri: string; mimeType?: string };
+export type PickedPhoto = { uri: string };
 
 export class ApiError extends Error {
   constructor(readonly status: number, message: string, readonly fieldErrors: Record<string, string> = {}) {
@@ -87,16 +87,22 @@ async function authenticatedRequest<T>(path: string, token: string, body?: strin
 }
 
 export const myListings = (token: string, signal: AbortSignal) => authenticatedRequest<OwnedListing[]>('me/listings', token, undefined, signal);
-export const createListing = (draft: CreateListingBody, token: string) => authenticatedRequest<Listing>('listings', token, JSON.stringify(draft));
 
-export async function uploadPhotos(listingId: string, photos: PickedPhoto[], token: string): Promise<Listing> {
+function photoForm(photos: Blob[]): FormData {
   const form = new FormData();
-  photos.forEach((photo, index) => {
-    const type = photo.mimeType || 'image/jpeg';
-    const extension = type === 'image/png' ? 'png' : type === 'image/heic' || type === 'image/heif' ? 'heic' : 'jpg';
-    // React Native encodes local file references as multipart file parts.
-    form.append('photos[]', { uri: photo.uri, name: `photo-${index}.${extension}`, type } as unknown as Blob);
-  });
-  return authenticatedRequest<Listing>(`listings/${encodeURIComponent(listingId)}/photos`, token, form);
+  for (const photo of photos) form.append('photos[]', photo);
+  return form;
+}
+
+export function createListing(draft: CreateListingBody, token: string, photos: Blob[] = []): Promise<Listing> {
+  const listing = JSON.stringify(draft);
+  if (photos.length === 0) return authenticatedRequest<Listing>('listings', token, listing);
+  const form = photoForm(photos);
+  form.append('listing', listing);
+  return authenticatedRequest<Listing>('listings', token, form);
+}
+
+export async function uploadPhotos(listingId: string, photos: Blob[], token: string): Promise<Listing> {
+  return authenticatedRequest<Listing>(`listings/${encodeURIComponent(listingId)}/photos`, token, photoForm(photos));
 }
 

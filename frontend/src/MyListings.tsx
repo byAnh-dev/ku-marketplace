@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Button, Image, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
-import { ApiError, createListing, CreateListingBody, Listing, myListings, OwnedListing, photoThumbnailURL } from './api';
-import { AddPhotos } from './PhotoPicker';
+import { File } from 'expo-file-system';
+import { ApiError, createListing, CreateListingBody, Listing, myListings, OwnedListing, photoThumbnailURL, PickedPhoto } from './api';
+import { AddPhotos, PhotoPicker } from './PhotoPicker';
 
 type Props = {
   token: string; onBack: () => void; onOpen: (listing: Listing) => void; onSessionExpired: () => void;
@@ -33,7 +34,7 @@ export function MyListings({ token, onBack, onOpen, onSessionExpired }: Props) {
   if (selected) return <AddPhotos listingId={selected.id} token={token} onBack={backToList}
     onSessionExpired={onSessionExpired} onDone={onOpen} />;
   if (creating) return <CreateListing token={token} onBack={backToList} onSessionExpired={onSessionExpired}
-    onCreated={listing => { setCreating(false); setSelected(listing); }} />;
+    onCreated={onOpen} />;
 
   return <ScrollView contentContainerStyle={s.page}>
     <Button title="Back to marketplace" onPress={onBack} />
@@ -44,7 +45,7 @@ export function MyListings({ token, onBack, onOpen, onSessionExpired }: Props) {
         <Text accessibilityRole="alert" style={s.error}>{state.message}</Text>
         <Button title="Retry my listings" onPress={() => setAttempt(n => n + 1)} />
         {state.expired && <Button title="Log in again" onPress={onSessionExpired} />}
-      </View> : state.rows.length === 0 ? <Text style={s.body}>You have no listings yet. Create one to add photos.</Text> :
+      </View> : state.rows.length === 0 ? <Text style={s.body}>You have no listings yet.</Text> :
         state.rows.map(({ listing, status }) => <View key={listing.id} style={s.card}>
           <Text style={s.title}>{listing.title}</Text>
           <Text style={s.body}>{status} · ${(listing.priceCents / 100).toFixed(2)}</Text>
@@ -88,13 +89,15 @@ function CreateListing({ token, onBack, onCreated, onSessionExpired }: {
   const [category, setCategory] = useState('');
   const [condition, setCondition] = useState('Good');
   const [pickupArea, setPickupArea] = useState('');
+  const [photos, setPhotos] = useState<PickedPhoto[]>([]);
+  const [picking, setPicking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [fields, setFields] = useState<Record<string, string>>({});
   const inFlight = useRef(false);
 
   async function publish() {
-    if (inFlight.current) return;
+    if (inFlight.current || picking) return;
     const priceText = price.trim();
     const [dollars, cents = ''] = priceText.split('.');
     const draft = {
@@ -106,7 +109,7 @@ function CreateListing({ token, onBack, onCreated, onSessionExpired }: {
     if (Object.keys(errors).length > 0) return;
     inFlight.current = true; setBusy(true);
     try {
-      onCreated(await createListing(draft, token));
+      onCreated(await createListing(draft, token, photos.map(photo => new File(photo.uri))));
     } catch (failure) {
       if (failure instanceof ApiError && failure.status === 401) { onSessionExpired(); return; }
       if (failure instanceof ApiError) setFields(failure.fieldErrors);
@@ -117,9 +120,8 @@ function CreateListing({ token, onBack, onCreated, onSessionExpired }: {
   }
 
   return <ScrollView contentContainerStyle={s.page} keyboardShouldPersistTaps="handled">
-    <Button title="Back to my listings" disabled={busy} onPress={onBack} />
+    <Button title="Back to my listings" disabled={busy || picking} onPress={onBack} />
     <Text style={s.heading}>Create listing</Text>
-    <Text style={s.body}>Publish the item details, then choose its photos. You can add photos later from My listings.</Text>
     <TextInput style={s.input} editable={!busy} accessibilityLabel="Title" placeholder="Title" value={title} onChangeText={setTitle} maxLength={120} />
     <TextInput style={s.input} editable={!busy} accessibilityLabel="Description" placeholder="Description" value={description} onChangeText={setDescription} multiline maxLength={2000} />
     <TextInput style={s.input} editable={!busy} accessibilityLabel="Price in dollars" placeholder="Price in dollars" value={price} onChangeText={setPrice} keyboardType="decimal-pad" />
@@ -128,9 +130,11 @@ function CreateListing({ token, onBack, onCreated, onSessionExpired }: {
     <View style={s.conditions}>{conditions.map(value =>
       <Button key={value} title={value === condition ? `${value} (selected)` : value} disabled={busy} onPress={() => setCondition(value)} />)}</View>
     <TextInput style={s.input} editable={!busy} accessibilityLabel="Pickup area" placeholder="Pickup area, defaults to Campus" value={pickupArea} onChangeText={setPickupArea} maxLength={80} />
+    <PhotoPicker photos={photos} onChange={setPhotos} disabled={busy} onPickingChange={setPicking} />
+    <Text style={s.body}>Photos are optional.</Text>
     {!!error && <Text accessibilityRole="alert" style={s.error}>{error}</Text>}
     {Object.entries(fields).map(([field, message]) => <Text key={field} accessibilityRole="alert" style={s.error}>{message}</Text>)}
-    {busy ? <ActivityIndicator accessibilityLabel="Creating listing" /> : <Button title="Publish and add photos" onPress={publish} />}
+    {busy ? <ActivityIndicator accessibilityLabel="Creating listing" /> : <Button title="Publish listing" disabled={picking} onPress={publish} />}
   </ScrollView>;
 }
 
