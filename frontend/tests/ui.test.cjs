@@ -318,6 +318,43 @@ test('a pending read preserves rapidly scrolled messages, retries failures and s
   assert.deepEqual(batches(), [[1], nextHundred, nextHundred, [102, 104]]);
 });
 
+test('displayed receipts drain after leaving a thread and a stale receipt cannot sign out the next account', async t => {
+  const h = harness(token);
+  h.reply('me', 200, user);
+  const ui = await mount(t, h.App);
+  const thread = { id: 'thread-1', listingId: listing.id, listingTitle: 'Study desk', peerDisplayName: 'Peer',
+    listingStatus: 'active', canMessage: true, blockedByMe: false, isBuyer: true };
+  const items = [11, 12].map(sequence => ({ sequence, senderId: 'peer', recipientId: user.id, senderDisplayName: 'Peer',
+    body: String(sequence), createdAt: '2026-11-22T10:00:00Z' }));
+  h.reply('/api/v1/conversations', 200, [thread]);
+  await press(ui, 'Messages');
+  h.reply('/api/v1/conversations/thread-1/messages', 200, { ...thread, items, hasNewer: false, hasOlder: false });
+  await press(ui, 'Study deskPeer');
+  const read = '/api/v1/conversations/thread-1/read';
+  const first = h.defer(read), second = h.defer(read);
+  const view = ui.container.queryAll(n => n.type === 'FlatList')[0].props.onViewableItemsChanged;
+  await act(async () => view({ viewableItems: [{ item: items[0], isViewable: true }] }));
+  await act(async () => view({ viewableItems: [{ item: items[1], isViewable: true }] }));
+  h.reply('/api/v1/conversations', 200, [thread]);
+  await press(ui, 'Back to messages');
+  h.reply('/api/v1/conversations', 200, [thread]);
+  await act(async () => first(204));
+  const reads = h.requests.filter(r => r.url.endsWith(read));
+  assert.deepEqual(reads.map(r => JSON.parse(r.body).sequences), [[11], [12]]);
+  assert.ok(reads.every(r => r.headers.get('Authorization') === 'Bearer ' + token));
+  await press(ui, 'Back to marketplace');
+  h.reply('logout', 204);
+  await press(ui, 'Log out');
+  await press(ui, 'Student login / register');
+  await fill(ui, 'KU email', 'second@ku.edu');
+  await fill(ui, 'Password', 'long-password');
+  h.reply('login', 200, { token: 'C'.repeat(72), user: { ...user, id: 'different-id', email: 'second@ku.edu', displayName: 'Second' } });
+  await press(ui, 'Log in');
+  await act(async () => second(401, { reason: 'Session expired' }));
+  assert.ok(hasText(ui, 'Signed in as Second'));
+  assert.equal(h.requests.filter(r => r.url.endsWith(read)).length, 2);
+});
+
 test('registration validates KU email, matching passwords, and UTF-8 bytes before showing verification instructions', async t => {
   const h = harness();
   let loggedIn = false;

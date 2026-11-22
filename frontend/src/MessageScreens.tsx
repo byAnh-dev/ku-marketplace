@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { uuid } from 'expo';
 import { ActivityIndicator, AppState, Button, FlatList, KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { ApiError, type Listing } from './api';
@@ -28,6 +28,44 @@ export function useMessageRefresh(session: Session | null, onExpired: () => void
   const [tick, setTick] = useState(0);
   const [counts, setCounts] = useState<Awaited<ReturnType<typeof fetchUnread>> | null>(null);
   const refresh = useCallback(() => setTick(value => value + 1), []);
+  // Receipts belong to the viewing session and can finish after leaving a thread.
+  const receipts = useMemo(() => ({
+    live: true,
+    threads: new Map<string, { pending: Set<number>; sending: boolean }>(),
+  }), [session?.token]);
+  const [readRevision, setReadRevision] = useState(0);
+  useEffect(() => {
+    receipts.live = true;
+    return () => { receipts.live = false; };
+  }, [receipts]);
+  const queueReads = useCallback((id: string, sequences: number[]) => {
+    if (!sequences.length || !receipts.live) return;
+    let thread = receipts.threads.get(id);
+    if (!thread) {
+      thread = { pending: new Set(), sending: false };
+      receipts.threads.set(id, thread);
+    }
+    for (const sequence of sequences) thread.pending.add(sequence);
+    setReadRevision(value => value + 1);
+  }, [receipts]);
+  useEffect(() => {
+    if (!session || !active || AppState.currentState !== 'active') return;
+    for (const [id, thread] of receipts.threads) {
+      if (thread.sending) continue;
+      const batch = [...thread.pending].slice(0, 100);
+      thread.sending = true;
+      markDisplayed(session.token, id, batch).then(() => {
+        if (!receipts.live) return;
+        for (const sequence of batch) thread.pending.delete(sequence);
+        if (!thread.pending.size) receipts.threads.delete(id);
+        thread.sending = false;
+        refresh();
+      }).catch(error => {
+        thread.sending = false;
+        if (receipts.live && error instanceof ApiError && error.status === 401) onExpired();
+      });
+    }
+  }, [session, active, tick, readRevision, receipts, refresh, onExpired]);
   useEffect(() => {
     if (!session) return;
     const change = (state: string | null | undefined) => setActive(state === 'active');
@@ -49,7 +87,7 @@ export function useMessageRefresh(session: Session | null, onExpired: () => void
       if (!signal.aborted && error instanceof ApiError && error.status === 401) onExpired();
     });
   }, [session, onExpired]));
-  return { active, tick, counts, refresh };
+  return { active, tick, counts, refresh, queueReads };
 }
 
 type Shared = { session: Session; poll: ReturnType<typeof useMessageRefresh>; back: () => void; onExpired: () => void };
@@ -100,10 +138,7 @@ export function ThreadScreen({ screen, session, poll, back, onExpired }: Omit<Sh
   const lastFetched = useRef<number | undefined>(undefined);
   const policyGeneration = useRef(0);
   const visibleIncoming = useRef(new Set<number>());
-  const pendingReads = useRef(new Set<number>());
-  const acknowledged = useRef(new Set<number>());
-  const reading = useRef(false);
-  const [viewRevision, setViewRevision] = useState(0);
+  const submitted = useRef(new Set<number>());
   const userId = session.user.id.toLowerCase();
   useEffect(() => {
     mounted.current = true;
@@ -154,38 +189,23 @@ export function ThreadScreen({ screen, session, poll, back, onExpired }: Omit<Sh
 
   const viewabilityConfig = useRef({ itemVisiblePercentThreshold: 50 }).current;
   const queueVisible = useCallback(() => {
+    if (!id || AppState.currentState !== 'active') return;
+    const batch: number[] = [];
     for (const sequence of visibleIncoming.current) {
-      if (!acknowledged.current.has(sequence)) pendingReads.current.add(sequence);
+      if (submitted.current.has(sequence)) continue;
+      submitted.current.add(sequence);
+      batch.push(sequence);
     }
-  }, []);
+    poll.queueReads(id, batch);
+  }, [id, poll.queueReads]);
   const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: ReadonlyArray<{ isViewable: boolean; item: Message }> }) => {
     visibleIncoming.current = new Set(viewableItems.filter(row => row.isViewable && row.item.recipientId.toLowerCase() === userId)
       .map(row => row.item.sequence));
-    if (mounted.current && AppState.currentState === 'active') {
-      // Capture this event before React batches another scroll update.
-      queueVisible();
-      setViewRevision(n => n + 1);
-    }
+    if (mounted.current) queueVisible();
   }, [userId, queueVisible]);
   useEffect(() => {
-    if (!id || !poll.active || AppState.currentState !== 'active') return;
-    queueVisible(); // Include rows still on screen when returning from the background.
-    if (reading.current) return;
-    const sequences = [...pendingReads.current].slice(0, 100);
-    if (!sequences.length) return;
-    reading.current = true;
-    markDisplayed(session.token, id, sequences).then(() => {
-      for (const sequence of sequences) {
-        acknowledged.current.add(sequence);
-        pendingReads.current.delete(sequence);
-      }
-      reading.current = false;
-      if (mounted.current) poll.refresh();
-    }).catch(cause => {
-      reading.current = false;
-      failed(cause, setHistoryError);
-    });
-  }, [id, poll.active, poll.tick, poll.refresh, session.token, viewRevision, failed, queueVisible]);
+    if (poll.active) queueVisible();
+  }, [poll.active, queueVisible]);
 
   async function send() {
     if (inFlight.current || !state.canMessage || !draft.trim()) return;
