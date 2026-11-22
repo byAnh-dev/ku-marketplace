@@ -1,3 +1,4 @@
+
 services:
   api:
     build: ./backend
@@ -9,9 +10,12 @@ services:
       PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8080}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       VERIFICATION_FROM_EMAIL: ${VERIFICATION_FROM_EMAIL:-}
+      PRIVATE_MESSAGE_KEY_BASE64: ${PRIVATE_MESSAGE_KEY_BASE64:-}
+      DEPLOYED_HTTPS: ${DEPLOYED_HTTPS:-false}
     volumes:
       - marketplace-data:/data
       - marketplace-uploads:/app/Public/uploads
+
 volumes:
   marketplace-data:
   marketplace-uploads:
