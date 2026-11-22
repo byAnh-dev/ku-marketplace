@@ -10,6 +10,8 @@ COPY Sources Sources
 COPY Tests Tests
 
 FROM base AS test
+# Deterministic 32-byte fixture key so message encryption is configured in tests.
+ENV PRIVATE_MESSAGE_KEY_BASE64=a3UtbWFya2V0cGxhY2UtdGVzdC1rZXktMzItYnl0ZSE=
 RUN swift test --jobs 4
 
 FROM base AS runtime
