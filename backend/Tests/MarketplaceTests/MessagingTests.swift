@@ -183,6 +183,41 @@ import VaporTesting
         }
     }
 
+    @Test func racingBlockAndSendHaveOneCommittedOutcome() async throws {
+        let directory = try databaseDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try await withApp(configure: { app in
+            try await configureApplication(app, databasePath: directory.appendingPathComponent("race.sqlite").path)
+        }) { app in
+            let buyer = Member(), seller = Member()
+            try await buyer.register(in: app)
+            try await seller.register(in: app)
+            try await listing(app, "desk", seller: seller)
+            try await listing(app, "chair", seller: seller)
+            let start = try await send(app, "listings/desk/conversations", as: buyer, "Desk")
+            let thread = try start.content.decode(Sent.self).conversationId
+            let blockPath = "conversations/\(thread)/block"
+            var expectedUnread = 1
+            for target in ["conversations/\(thread)/messages", "listings/chair/conversations"] {
+                let key = UUID()
+                async let blocking = request(app, .PUT, blockPath, as: seller)
+                async let sending = send(app, target, as: buyer, "Race", key: key)
+                let (block, sent) = try await (blocking, sending)
+                try #require(block.status == .ok)
+                try #require(sent.status == .created || sent.status == .forbidden)
+                let committed = sent.status == .created
+                if committed { expectedUnread += 1 }
+                #expect(try await send(app, target, as: buyer, "Race", key: key).status == (committed ? .ok : .forbidden))
+                #expect(try await send(app, target, as: buyer, "After block").status == .forbidden)
+                let unread = try await request(app, .GET, "me/unread", as: seller)
+                #expect(try unread.content.decode(Unread.self).total == expectedUnread)
+                let expectedThreads = target.hasPrefix("listings/") && committed ? 2 : 1
+                #expect(try await inbox(app, buyer).count == expectedThreads)
+                #expect(try await request(app, .DELETE, blockPath, as: seller).status == .ok)
+            }
+        }
+    }
+
     @Test func retryAndReadOnlyHistorySurviveBlocksListingClosureAndRestart() async throws {
         let directory = try databaseDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
