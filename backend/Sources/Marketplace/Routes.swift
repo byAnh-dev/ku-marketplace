@@ -38,6 +38,7 @@ func configureRoutes(
     listings.get { req async throws -> Response in
         let query = try req.query.decode(SearchQuery.self)
         let filters: ListingFilters
+        let sort: Catalog.Sort
         do {
             filters = try ListingFilters(
                 category: query.category,
@@ -45,6 +46,14 @@ func configureRoutes(
                 minPriceCents: query.minPriceCents,
                 maxPriceCents: query.maxPriceCents
             )
+            guard let parsed = Catalog.Sort(queryValue: query.sort ?? "") else {
+                throw ListingFieldErrors(
+                    fields: [
+                        "sort": "Sort must be one of newest, price_asc or price_desc."
+                    ]
+                )
+            }
+            sort = parsed
         } catch let failure as ListingFieldErrors {
             let response = Response(status: .unprocessableEntity)
             try response.content.encode(
@@ -60,7 +69,8 @@ func configureRoutes(
             query.q ?? "",
             page: query.page ?? 1,
             per: query.per ?? 20,
-            filters: filters
+            filters: filters,
+            sort: sort
         )
         let response = Response(status: .ok)
 
@@ -437,6 +447,7 @@ private struct SearchQuery: Decodable {
     let condition: String?
     let minPriceCents: String?
     let maxPriceCents: String?
+    let sort: String?
 }
 
 private struct PublishWithPhotosBody: Content {
