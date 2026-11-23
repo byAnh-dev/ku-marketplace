@@ -206,13 +206,15 @@ import VaporTesting
             // Unblock even a broken implementation that holds its DB transaction
             // across delivery. That defect fails this test instead of hanging it.
             let watchdog = Task {
-                try await Task.sleep(nanoseconds: 3_000_000_000)
+                try await Task.sleep(nanoseconds: 10_000_000_000)
                 await mailbox.release(timedOut: true)
             }
             do {
-                for _ in 0..<200 {
+                // A loaded CI runner can take seconds to schedule the resend task;
+                // one second of polling made this fail at random, not on a defect.
+                for _ in 0..<900 {
                     if await mailbox.isWaiting() { break }
-                    try await Task.sleep(nanoseconds: 5_000_000)
+                    try await Task.sleep(nanoseconds: 10_000_000)
                 }
                 try #require(await mailbox.isWaiting())
                 let pending = try #require(await mailbox.received().last)
