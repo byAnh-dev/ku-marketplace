@@ -64,6 +64,7 @@ func configureApplication(
         CreateListings(seedRows: seedListings)
     )
     app.migrations.add(AddListingRevisions())
+    app.migrations.add(AddListingUpdatedAt())
     app.migrations.add(CreateMarketplaceIndexes())
     app.migrations.add(CreateMessaging())
     app.migrations.add(CreateUserBlocks())
