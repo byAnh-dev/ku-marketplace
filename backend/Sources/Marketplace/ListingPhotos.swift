@@ -8,7 +8,7 @@ struct PhotoUploadBody: Content {
 }
 
 struct PhotoUpload: Sendable {
-    static let maxCount = 10
+    static let maxCount = 5
     static let maxBytes = 5 * 1024 * 1024
 
     let files: [(data: Data, ext: String)]
@@ -24,7 +24,7 @@ struct PhotoUpload: Sendable {
 
         guard photos.count <= Self.maxCount else {
             throw ListingFieldErrors(
-                fields: ["photos": "Add up to 10 photos."]
+                fields: ["photos": "Add up to 5 photos."]
             )
         }
 
@@ -58,10 +58,18 @@ struct PhotoUpload: Sendable {
             let isPNG = input.count >= 8 &&
                 Array(input.prefix(8)) == pngSignature
 
-            guard isJPEG || isPNG else {
+            // HEIF/HEIC: an ISO-BMFF file with an 'ftyp' box and a still-image brand.
+            let heifBrands = ["heic", "heix", "hevc", "hevx", "mif1", "msf1"]
+            let isHEIC = input.count >= 12 &&
+                Array(input[4..<8]) == Array("ftyp".utf8) &&
+                heifBrands.contains(
+                    String(decoding: input[8..<12], as: UTF8.self)
+                )
+
+            guard isJPEG || isPNG || isHEIC else {
                 throw ListingFieldErrors(
                     fields: [
-                        "photos": "Photo \(number) must be a JPEG or PNG image."
+                        "photos": "Photo \(number) must be a JPEG, PNG or HEIC image."
                     ]
                 )
             }
