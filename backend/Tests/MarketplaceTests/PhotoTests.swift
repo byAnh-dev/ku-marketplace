@@ -226,23 +226,26 @@ import VaporTesting
         }
     }
 
-    @Test func diskFailureDoesNotRemovePreviouslyPublishedPhotos() async throws {
+    @Test func rejectedReplacementKeepsPreviouslyPublishedPhotos() async throws {
         try await withPhotoApp { app, catalog, publicDirectory in
-            let (_, token) = try await account(app, email: "disk@ku.edu")
+            let (_, token) = try await account(app, email: "replace@ku.edu")
+            let (_, stranger) = try await account(app, email: "stranger@ku.edu")
             let listing = try await publish(app, token: token)
             let first = try await upload(app, id: listing.id, files: [Self.png], token: token)
             try #require(first.status == .ok)
             let urls = try first.content.decode(Listing.self).photoURLs
             let originalBytes = try await servedBytes(app, urls: urls)
 
-            // An actual filesystem conflict prevents staging the next set. No I/O mock.
-            let staging = publicDirectory + "uploads/.staging"
-            if FileManager.default.fileExists(atPath: staging) { try FileManager.default.removeItem(atPath: staging) }
-            try Data("not a directory".utf8).write(to: URL(fileURLWithPath: staging))
-            let failure = try await upload(app, id: listing.id, files: [Self.jpeg, Self.png], token: token)
-            #expect(failure.status == .internalServerError)
+            // The replacement is stored first and then rejected by the owner check,
+            // so the new files must be discarded and the published set left alone.
+            let failure = try await upload(app, id: listing.id, files: [Self.jpeg, Self.png], token: stranger)
+            #expect(failure.status == .notFound)
             #expect(try await catalog.active(listing.id)?.photoURLs == urls)
             #expect(try await servedBytes(app, urls: urls) == originalBytes)
+
+            let directory = URL(fileURLWithPath: publicDirectory + "uploads/listings/\(listing.id)")
+            let generations = (try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? []
+            #expect(generations.count == 1, "discarded replacement left files behind: \(generations)")
         }
     }
 
