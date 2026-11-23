@@ -42,7 +42,7 @@ Listings already lost by restarting an older in-memory backend cannot be recover
 
 | Request | Success | Other responses |
 | --- | --- | --- |
-| `GET /api/v1/listings?q=dorm&page=1&per=20` | `200`, active listings matching title or description, ignoring case; filtering and pagination run in SQLite. Response headers `X-Page`, `X-Page-Size`, and `X-Has-More` describe the page. | `422` with `fieldErrors` when a filter value is invalid |
+| `GET /api/v1/listings?q=dorm&page=1&per=20&sort=price_asc` | `200`, active listings matching title or description, ignoring case; filtering, ordering and pagination run in SQLite. Response headers `X-Page`, `X-Page-Size`, and `X-Has-More` describe the page. | `422` with `fieldErrors` when a filter value is invalid |
 | `GET /api/v1/listings/:id` | `200`, public active listing | `404` unavailable |
 | `POST /api/v1/listings` | `201`, created listing plus `Location` | `401` missing or invalid session; `422` field errors; `400` malformed JSON |
 | `POST /api/v1/listings/:id/photos` | `200`, listing with ordered replacement photo URLs | `400` malformed multipart; `401` invalid session; `404` not owned or inactive; `422` invalid photos; `413` request too large |
@@ -86,6 +86,14 @@ Blank values are ignored, so a cleared filter can be sent as an empty string.
 price, or an unknown condition returns `422` with the same `fieldErrors` shape
 as publish; several bad values are reported together. An unknown category is not
 an error: it simply matches nothing and returns `200 []`.
+
+### Ordering
+
+`sort` selects the feed order: `newest` (the default), `price_asc`, or
+`price_desc`. Prices compare numerically and the listing id breaks ties, so a
+page is stable when several rows share a price. Any other value returns `422`
+with `fieldErrors.sort`. Keyword, filters, and pagination all keep the chosen
+order.
 
 ## Publish contract
 
