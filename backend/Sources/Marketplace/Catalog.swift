@@ -198,7 +198,8 @@ struct Catalog: Sendable {
 
     // Five new listings per rolling ten minutes.
     // A transaction serializes the quota check with the insert.
-    func add(_ listing: Listing, ownerID: String) async throws {
+    @discardableResult
+    func add(_ listing: Listing, ownerID: String) async throws -> Listing {
         try await database.transaction { db in
             guard let sql = db as? any SQLDatabase else {
                 throw Abort(.internalServerError)
@@ -249,6 +250,9 @@ struct Catalog: Sendable {
             )
 
             try await record.create(on: db)
+
+            // Return the stored shape so the caller sees the real posting date.
+            return record.listing
         }
     }
 
