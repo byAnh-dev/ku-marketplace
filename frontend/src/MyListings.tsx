@@ -5,6 +5,7 @@ import { ApiError, createListing, CreateListingBody, Listing, myListings, OwnedL
 import { AddPhotos, PhotoPicker } from './PhotoPicker';
 import { EditListingForm } from './EditListingForm';
 import { OwnedListingCard } from './OwnedListingCard';
+import { listingConditions } from './listingChoices';
 
 type Props = {
   token: string; onBack: () => void; onOpen: (listing: Listing) => void;
@@ -98,7 +99,7 @@ function EditListing({ listingId, token, onBack, onSaved, onSessionExpired }: {
   </ScrollView>;
 }
 
-const conditions = ['New', 'Like new', 'Good', 'Fair', 'Poor'];
+const conditions = listingConditions;
 
 function listingErrors(draft: CreateListingBody, price: string): Record<string, string> {
   const errors: Record<string, string> = {};

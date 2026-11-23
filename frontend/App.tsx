@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Button, FlatList, Image, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { ApiError, detail, Listing, ownedListing, photoURL, search } from './src/api';
+import { ApiError, detail, Listing, ListingFilters, ownedListing, photoURL, search } from './src/api';
+import { listingCategories, listingConditions } from './src/listingChoices';
 import { AuthScreen } from './src/AuthScreen';
 import { logout, restoreSession, Session } from './src/auth';
 import { MyListings } from './src/MyListings';
@@ -88,22 +89,100 @@ function Details({ id, back, ownerToken, contact, token, onExpired }: { id: stri
   </ScrollView>;
 }
 
-function Market({ query, setQuery, open, account }: { query: string; setQuery: (q: string) => void; open: (id: string) => void; account: React.ReactNode }) {
+type FilterDraft = { category: string; condition: string; minimum: string; maximum: string };
+const noFilters: FilterDraft = { category: '', condition: '', minimum: '', maximum: '' };
+
+const filterCount = (filters: ListingFilters) =>
+  (filters.category ? 1 : 0) + (filters.condition ? 1 : 0) +
+  (filters.minPriceCents !== undefined ? 1 : 0) + (filters.maxPriceCents !== undefined ? 1 : 0);
+
+const draftOf = (filters: ListingFilters): FilterDraft => ({
+  category: filters.category ?? '', condition: filters.condition ?? '',
+  minimum: filters.minPriceCents !== undefined ? String(filters.minPriceCents / 100) : '',
+  maximum: filters.maxPriceCents !== undefined ? String(filters.maxPriceCents / 100) : '',
+});
+
+// Returns undefined for a blank field, null for an invalid one, cents otherwise.
+function centsFrom(value: string): number | undefined | null {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  if (!/^\d+(\.\d{1,2})?$/.test(trimmed)) return null;
+  return Math.round(Number(trimmed) * 100);
+}
+
+function Market({ query, setQuery, filters, setFilters, open, account }: {
+  query: string; setQuery: (q: string) => void; filters: ListingFilters; setFilters: (value: ListingFilters) => void;
+  open: (id: string) => void; account: React.ReactNode }) {
   const [page, setPage] = useState(1);
-  useEffect(() => setPage(1), [query]);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [draft, setDraft] = useState<FilterDraft>(() => draftOf(filters));
+  const [filterError, setFilterError] = useState('');
+  useEffect(() => setPage(1), [query, filters]);
   const loadPage = useCallback((key: string, signal: AbortSignal) => {
-    const [term, currentPage] = key.split('\u0000');
-    return search(term, Number(currentPage), signal);
+    const [term, currentPage, filtersJSON] = key.split('\u0000');
+    return search(term, Number(currentPage), JSON.parse(filtersJSON) as ListingFilters, signal);
   }, []);
-  const { state, retry } = useResource(`${query}\u0000${page}`, loadPage);
+  const { state, retry } = useResource(`${query}\u0000${page}\u0000${JSON.stringify(filters)}`, loadPage);
+  const applied = filterCount(filters);
+
+  function applyFilters() {
+    const minimum = centsFrom(draft.minimum);
+    const maximum = centsFrom(draft.maximum);
+    if (minimum === null || maximum === null) { setFilterError('Enter prices like 10 or 10.50.'); return; }
+    if (minimum !== undefined && maximum !== undefined && minimum > maximum) {
+      setFilterError('Minimum price must not be greater than the maximum.'); return;
+    }
+    setFilterError('');
+    setFilters({ category: draft.category || undefined, condition: draft.condition || undefined,
+      minPriceCents: minimum, maxPriceCents: maximum });
+    setPanelOpen(false);
+  }
+  function clearFilters() {
+    setDraft(noFilters); setFilterError('');
+    setFilters({});
+  }
+
   return <View style={[s.page, s.fill]}>
     <Text style={s.label}>UNIVERSITY OF KANSAS</Text><Text style={s.heading}>KU Marketplace</Text>
     {account}
     <TextInput style={s.input} accessibilityLabel="Search listings" placeholder="Search items by keyword" placeholderTextColor="#606975" value={query} onChangeText={setQuery} />
+    <View style={s.filterRow}>
+      <Button title="Filters" onPress={() => setPanelOpen(open => !open)} />
+      {applied > 0 && <Text style={s.label}>{applied} applied</Text>}
+      {applied > 0 && <Button title="Clear filters" onPress={clearFilters} />}
+    </View>
+    {panelOpen && <View style={s.filterPanel}>
+      <Text style={s.label}>Category</Text>
+      <View style={s.chips}>{listingCategories.map(([emoji, value]) =>
+        <Pressable key={value} accessibilityRole="button" accessibilityLabel={value}
+          accessibilityState={{ selected: draft.category === value }}
+          onPress={() => setDraft(current => ({ ...current, category: current.category === value ? '' : value }))}
+          style={[s.chip, draft.category === value && s.activeChip]}>
+          <Text style={[s.chipText, draft.category === value && s.activeChipText]}>{emoji} {value}</Text>
+        </Pressable>)}</View>
+      <Text style={s.label}>Condition</Text>
+      <View style={s.chips}>{listingConditions.map(value =>
+        <Pressable key={value} accessibilityRole="button" accessibilityLabel={value}
+          accessibilityState={{ selected: draft.condition === value }}
+          onPress={() => setDraft(current => ({ ...current, condition: current.condition === value ? '' : value }))}
+          style={[s.chip, draft.condition === value && s.activeChip]}>
+          <Text style={[s.chipText, draft.condition === value && s.activeChipText]}>{value}</Text>
+        </Pressable>)}</View>
+      <Text style={s.label}>Price range (USD)</Text>
+      <View style={s.priceRow}>
+        <TextInput accessibilityLabel="Minimum price" placeholder="Min" placeholderTextColor="#606975" keyboardType="decimal-pad"
+          value={draft.minimum} onChangeText={minimum => setDraft(current => ({ ...current, minimum }))} style={[s.input, s.priceInput]} />
+        <TextInput accessibilityLabel="Maximum price" placeholder="Max" placeholderTextColor="#606975" keyboardType="decimal-pad"
+          value={draft.maximum} onChangeText={maximum => setDraft(current => ({ ...current, maximum }))} style={[s.input, s.priceInput]} />
+      </View>
+      {!!filterError && <Text accessibilityRole="alert" style={s.error}>{filterError}</Text>}
+      <Button title="Apply filters" onPress={applyFilters} />
+    </View>}
     {query.length > 0 && <Button title="Clear search" onPress={() => setQuery('')} />}
     {state.phase !== 'ready' ? <Feedback state={state} retry={retry} /> :
       <FlatList data={state.value.items} keyExtractor={item => item.id}
-        ListEmptyComponent={<Text style={s.body}>{query.trim() ? 'No matching items. Try another keyword.' : 'No active listings yet.'}</Text>}
+        ListEmptyComponent={<Text style={s.body}>{applied > 0 ? 'No listings match these filters.' :
+          query.trim() ? 'No matching items. Try another keyword.' : 'No active listings yet.'}</Text>}
         renderItem={({ item }) => <Pressable accessibilityRole="button" style={s.card} onPress={() => open(item.id)}>
           <Photo uri={item.photoURLs[0]} /><Text style={s.label}>{item.category}</Text>
           <Text style={s.title}>{item.title}</Text><Text style={s.price}>{money(item.priceCents)}</Text>
@@ -118,6 +197,7 @@ function Market({ query, setQuery, open, account }: { query: string; setQuery: (
 export default function App() {
   const [id, setId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [filters, setFilters] = useState<ListingFilters>({});
   const [authOpen, setAuthOpen] = useState(false);
   const [myListingsOpen, setMyListingsOpen] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
@@ -168,7 +248,7 @@ export default function App() {
         contact={(listing, existing) => session ? setMessageScreen(existing ? { kind: 'thread', conversation: existing } : { kind: 'new', listing }) : setAuthOpen(true)} /> :
       myListingsOpen && session ? <MyListings token={session.token} onBack={() => setMyListingsOpen(false)} onViewOwned={setId}
         onOpen={listing => { setMyListingsOpen(false); setId(listing.id); }} onSessionExpired={sessionExpired} /> :
-      <Market query={query} setQuery={setQuery} open={setId} account={account} />}
+      <Market query={query} setQuery={setQuery} filters={filters} setFilters={setFilters} open={setId} account={account} />}
   </SafeAreaView>;
 }
 
@@ -182,6 +262,16 @@ const s = StyleSheet.create({
   card: { borderRadius: 12, backgroundColor: 'white', padding: 14, gap: 6, marginBottom: 12 },
   photo: { width: '100%', height: 120, borderRadius: 8 },
   pagination: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8 },
+  filterRow: { flexDirection: 'row', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
+  filterPanel: { gap: 8, backgroundColor: 'white', borderRadius: 12, padding: 14 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { borderWidth: 1, borderColor: '#9aa7b5', borderRadius: 999, paddingVertical: 6, paddingHorizontal: 12 },
+  activeChip: { backgroundColor: '#152f52', borderColor: '#152f52' },
+  chipText: { color: '#152f52', fontSize: 14 },
+  activeChipText: { color: 'white' },
+  priceRow: { flexDirection: 'row', gap: 8 },
+  priceInput: { flex: 1 },
+  error: { color: '#b00020' },
   placeholder: { backgroundColor: '#e7edf0', alignItems: 'center', justifyContent: 'center' },
   price: { color: '#174d7e', fontSize: 20, fontWeight: '700' },
   body: { color: '#263745', fontSize: 17 },
