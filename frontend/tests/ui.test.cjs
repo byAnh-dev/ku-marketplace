@@ -17,6 +17,7 @@ const listing = {
   id: 'desk-1', title: 'Study desk', description: 'A desk for studying.',
   priceCents: 2500, condition: 'Good', category: 'Furniture',
   sellerDisplayName: 'Another Student', pickupArea: 'Campus', photoURLs: [],
+  postedAt: '2026-11-01T12:00:00.000Z',
 };
 
 // React, application components, effects, and the API modules execute unchanged.
@@ -965,4 +966,18 @@ test('sorting changes the feed order and keeps the keyword and filters', async t
   assert.doesNotMatch(newest, /sort=/);
   assert.match(newest, /category=Textbooks/);
   assert.equal(inputValue(ui, 'Search listings'), 'desk');
+});
+
+test('cards and details show the posting date and public status', async t => {
+  const h = harness();
+  const ui = await mount(t, h.App);
+  assert.ok(hasText(ui, 'Study desk'));
+  assert.ok(hasText(ui, 'Posted'), 'card should show the posting date');
+
+  const card = ui.container.queryAll(node => node.type === 'Pressable')
+    .find(node => text(node).includes('Study desk'));
+  assert.ok(card, 'listing card should be pressable');
+  await act(async () => { card.props.onPress(); });
+  assert.ok(hasText(ui, 'Status: Active'));
+  assert.ok(hasText(ui, 'Posted'));
 });
