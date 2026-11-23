@@ -128,13 +128,13 @@ Sprint 1 records.
 
 Send a bearer session and multipart file parts named `photos[]` in display
 order. The first is the cover. An upload replaces the complete set, with one
-to five JPEG, PNG or HEIC images, each at most 8 MiB and 20 megapixels. The
+to five JPEG, PNG or HEIC images, each at most 5 MiB and 20 megapixels. The
 request body limit is configured as `45mb`, including multipart overhead. Validation errors
 use `fieldErrors.photos`; ownership is checked against an active listing.
 
 libvips fully decodes and re-encodes each image, strips metadata, applies
 orientation and converts HEIC to JPEG. PNG stays PNG. Processed files must
-also fit the 8 MiB limit. Native builds need libvips: `brew install vips` on
+also fit the 5 MiB limit. Native builds need libvips: `brew install vips` on
 macOS or `apt install libvips-dev libheif-plugin-libde265` on Ubuntu 24.04.
 The Dockerfile installs both libvips and the HEIC decoder plugin.
 
