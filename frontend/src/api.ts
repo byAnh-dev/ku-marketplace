@@ -11,6 +11,7 @@ export type ListingPage = { items: Listing[]; page: number; per: number; hasMore
 export type ListingFilters = {
   category?: string; condition?: string; minPriceCents?: number; maxPriceCents?: number;
 };
+export type ListingSort = 'newest' | 'price_asc' | 'price_desc';
 
 export type OwnedListing = { status: 'active' | 'sold' | 'reserved' | 'deleted'; listing: Listing; revision: string };
 export type CreateListingBody = {
@@ -31,8 +32,10 @@ async function get<T>(path: string, signal: AbortSignal): Promise<{ value: T; he
   return { value: await response.json(), headers: response.headers };
 }
 
-export async function search(q: string, page: number, filters: ListingFilters, signal: AbortSignal): Promise<ListingPage> {
+export async function search(q: string, page: number, filters: ListingFilters, sort: ListingSort,
+  signal: AbortSignal): Promise<ListingPage> {
   const params = [`q=${encodeURIComponent(q)}`, `page=${page}`, 'per=20'];
+  if (sort !== 'newest') params.push(`sort=${sort}`);
   if (filters.category) params.push(`category=${encodeURIComponent(filters.category)}`);
   if (filters.condition) params.push(`condition=${encodeURIComponent(filters.condition)}`);
   if (filters.minPriceCents !== undefined) params.push(`minPriceCents=${filters.minPriceCents}`);

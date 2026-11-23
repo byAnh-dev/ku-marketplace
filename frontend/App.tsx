@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Button, FlatList, Image, Pressable, SafeAreaView, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { ApiError, detail, Listing, ListingFilters, ownedListing, photoURL, search } from './src/api';
+import { ApiError, detail, Listing, ListingFilters, ListingSort, ownedListing, photoURL, search } from './src/api';
 import { listingCategories, listingConditions } from './src/listingChoices';
 import { AuthScreen } from './src/AuthScreen';
 import { logout, restoreSession, Session } from './src/auth';
@@ -110,19 +110,27 @@ function centsFrom(value: string): number | undefined | null {
   return Math.round(Number(trimmed) * 100);
 }
 
-function Market({ query, setQuery, filters, setFilters, open, account }: {
+const sortChoices: { value: ListingSort; label: string }[] = [
+  { value: 'newest', label: 'Newest' },
+  { value: 'price_asc', label: 'Lowest price' },
+  { value: 'price_desc', label: 'Highest price' },
+];
+
+function Market({ query, setQuery, filters, setFilters, sort, setSort, open, account }: {
   query: string; setQuery: (q: string) => void; filters: ListingFilters; setFilters: (value: ListingFilters) => void;
+  sort: ListingSort; setSort: (value: ListingSort) => void;
   open: (id: string) => void; account: React.ReactNode }) {
   const [page, setPage] = useState(1);
   const [panelOpen, setPanelOpen] = useState(false);
   const [draft, setDraft] = useState<FilterDraft>(() => draftOf(filters));
   const [filterError, setFilterError] = useState('');
-  useEffect(() => setPage(1), [query, filters]);
+  useEffect(() => setPage(1), [query, filters, sort]);
   const loadPage = useCallback((key: string, signal: AbortSignal) => {
-    const [term, currentPage, filtersJSON] = key.split('\u0000');
-    return search(term, Number(currentPage), JSON.parse(filtersJSON) as ListingFilters, signal);
+    const [term, currentPage, filtersJSON, order] = key.split('\u0000');
+    return search(term, Number(currentPage), JSON.parse(filtersJSON) as ListingFilters, order as ListingSort, signal);
   }, []);
-  const { state, retry } = useResource(`${query}\u0000${page}\u0000${JSON.stringify(filters)}`, loadPage);
+  const { state, retry } = useResource(
+    `${query}\u0000${page}\u0000${JSON.stringify(filters)}\u0000${sort}`, loadPage);
   const applied = filterCount(filters);
 
   function applyFilters() {
@@ -146,6 +154,13 @@ function Market({ query, setQuery, filters, setFilters, open, account }: {
     <Text style={s.label}>UNIVERSITY OF KANSAS</Text><Text style={s.heading}>KU Marketplace</Text>
     {account}
     <TextInput style={s.input} accessibilityLabel="Search listings" placeholder="Search items by keyword" placeholderTextColor="#606975" value={query} onChangeText={setQuery} />
+    <View style={s.chips}>{sortChoices.map(choice =>
+      <Pressable key={choice.value} accessibilityRole="button" accessibilityLabel={choice.label}
+        accessibilityState={{ selected: sort === choice.value }}
+        onPress={() => setSort(choice.value)}
+        style={[s.chip, sort === choice.value && s.activeChip]}>
+        <Text style={[s.chipText, sort === choice.value && s.activeChipText]}>{choice.label}</Text>
+      </Pressable>)}</View>
     <View style={s.filterRow}>
       <Button title="Filters" onPress={() => setPanelOpen(open => !open)} />
       {applied > 0 && <Text style={s.label}>{applied} applied</Text>}
@@ -198,6 +213,7 @@ export default function App() {
   const [id, setId] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [filters, setFilters] = useState<ListingFilters>({});
+  const [sort, setSort] = useState<ListingSort>('newest');
   const [authOpen, setAuthOpen] = useState(false);
   const [myListingsOpen, setMyListingsOpen] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
@@ -248,7 +264,7 @@ export default function App() {
         contact={(listing, existing) => session ? setMessageScreen(existing ? { kind: 'thread', conversation: existing } : { kind: 'new', listing }) : setAuthOpen(true)} /> :
       myListingsOpen && session ? <MyListings token={session.token} onBack={() => setMyListingsOpen(false)} onViewOwned={setId}
         onOpen={listing => { setMyListingsOpen(false); setId(listing.id); }} onSessionExpired={sessionExpired} /> :
-      <Market query={query} setQuery={setQuery} filters={filters} setFilters={setFilters} open={setId} account={account} />}
+      <Market query={query} setQuery={setQuery} filters={filters} setFilters={setFilters} sort={sort} setSort={setSort} open={setId} account={account} />}
   </SafeAreaView>;
 }
 

@@ -55,17 +55,54 @@ struct Catalog: Sendable {
         return request
     }
 
+    /// Feed ordering. Prices compare numerically; the listing id breaks ties so
+    /// pages stay stable when many rows share a price.
+    enum Sort: String, Sendable, CaseIterable {
+        case newest
+        case priceAscending = "price_asc"
+        case priceDescending = "price_desc"
+
+        init?(queryValue: String) {
+            switch queryValue.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "", "newest": self = .newest
+            case "price_asc": self = .priceAscending
+            case "price_desc": self = .priceDescending
+            default: return nil
+            }
+        }
+    }
+
+    private func ordered(
+        _ request: QueryBuilder<ListingRecord>,
+        by sort: Sort
+    ) -> QueryBuilder<ListingRecord> {
+        switch sort {
+        case .newest:
+            return request
+                .sort(\.$id, .descending)
+                .sort(\.$listingID, .descending)
+        case .priceAscending:
+            return request
+                .sort(\.$priceCents, .ascending)
+                .sort(\.$listingID, .ascending)
+        case .priceDescending:
+            return request
+                .sort(\.$priceCents, .descending)
+                .sort(\.$listingID, .descending)
+        }
+    }
+
     /// Active listings only, newest first. Filtering and pagination happen in the database.
     func search(
         _ query: String,
-        filters: ListingFilters = .none
+        filters: ListingFilters = .none,
+        sort: Sort = .newest
     ) async throws -> [Listing] {
         let term = query.trimmingCharacters(
             in: .whitespacesAndNewlines
         ).lowercased()
 
-        return try await matches(term, filters)
-            .sort(\.$id, .descending)
+        return try await ordered(matches(term, filters), by: sort)
             .all()
             .map(\.listing)
     }
@@ -81,7 +118,8 @@ struct Catalog: Sendable {
         _ query: String,
         page: Int,
         per: Int,
-        filters: ListingFilters = .none
+        filters: ListingFilters = .none,
+        sort: Sort = .newest
     ) async throws -> SearchPage {
         let term = query.trimmingCharacters(
             in: .whitespacesAndNewlines
@@ -91,8 +129,7 @@ struct Catalog: Sendable {
         let safePer = min(max(per, 1), 50)
         let offset = (safePage - 1) * safePer
 
-        let records = try await matches(term, filters)
-            .sort(\.$id, .descending)
+        let records = try await ordered(matches(term, filters), by: sort)
             .range(offset..<(offset + safePer + 1))
             .all()
 
