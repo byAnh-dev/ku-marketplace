@@ -3,8 +3,11 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+backend/Public/uploads/
 .build/
 .swiftpm/
+*.sqlite
+*.sqlite-*
 DerivedData/
 node_modules/
 .expo/

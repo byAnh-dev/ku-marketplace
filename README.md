@@ -1,35 +1,74 @@
 # KU Marketplace
 
-An iOS-first marketplace for University of Kansas students. This Team 19 starter has a Swift/Vapor HTTP API in `backend/` and an Expo/React Native TypeScript app in `frontend/`. It runs without credentials or cloud services. The read-only catalog uses two active sample items and one sold item.
+An iOS-first marketplace for University of Kansas students. This Team 19 starter has a Swift/Vapor HTTP API in `backend/` and an Expo/React Native TypeScript app in `frontend/`. Public browsing runs without credentials or cloud services. The catalog starts with two active sample items and one sold item.
 
 ## Run locally
 
 1. Install Docker Desktop with Linux containers (or Docker Engine with Compose) and Node.js 24 with npm. Start the Docker engine.
-2. From the repo root, run `docker compose up --build`. The first Swift build downloads and compiles dependencies. Open <http://localhost:8080/health> and expect `{"status":"ok"}`. With a Swift 6.3 toolchain on macOS or Linux you can instead run `swift run Marketplace serve --hostname 0.0.0.0` from `backend/`.
+2. From the repo root, run `docker compose up --build`. The first Swift build downloads and compiles dependencies. Open <http://localhost:8080/health> and expect `{"status":"ok"}`. With a Swift 6.3 toolchain on macOS or Linux, install libvips (`brew install vips` or `apt install libvips-dev libheif-plugin-libde265` on Ubuntu 24.04) and run `swift run Marketplace serve --hostname 0.0.0.0` from `backend/`.
 3. In a second terminal, run `cd frontend`, then `npm ci`. For an iOS simulator on the API machine, leave the API URL unset. For the standard Android emulator the default is `http://10.0.2.2:8080`.
-4. On a **physical phone**, copy `.env.example` to `.env.local` inside `frontend/` and replace the URL with `http://<computer-LAN-IP>:8080`. Connect both devices to the same trusted network and check that the phone can open the health URL. Restart Metro after changing the URL. Never put secrets in an `EXPO_PUBLIC_*` variable.
-5. Run `npm start` and scan the QR code with an Expo Go client compatible with SDK 57. On a Mac with Xcode and an installed iOS simulator, press **i**; for a local native build use `npx expo run:ios`. On Windows use a physical device or Android emulator. To stop the API, run `docker compose down`.
+4. On a **physical phone**, create `frontend/.env.local` with the line `EXPO_PUBLIC_API_URL=http://<computer-LAN-IP>:8080`. Use your computer's LAN IP address. Connect both devices to the same trusted network and check that the phone can open the health URL. Restart Metro after changing the URL. Never put secrets in an `EXPO_PUBLIC_*` variable.
+5. Run `npm start` and scan the QR code with an Expo Go client compatible with SDK 58. On a Mac with Xcode and an installed iOS simulator, press **i**; for a local native build use `npx expo run:ios`. On Windows use a physical device or Android emulator. To stop the API, run `docker compose down`.
 
 ## Try the starter
 
 Open the marketplace, search for **DORM** (a word in the lamp description), open the lamp and return to your results. Clear search to restore all active items. Listings with no photos have a placeholder. Details load from the server when opened.
 
+Choose **Student login / register** to create an account with a KU email address.
+Open the email verification link within 30 minutes, then return to the app and
+log in. Registration does not sign you in automatically. Email delivery needs
+the provider configuration in [backend/README.md](backend/README.md). For local
+fictional accounts, enable `DEV_EMAIL_VERIFICATION=true` on the backend and use
+the link from its logs.
+
+If the verification email is missing or its link has expired, enter your KU
+email on the login screen and choose **Resend verification email**. Wait 60
+seconds between attempts, including after registration. A successful resend
+replaces older links with a new 30-minute link for the same account. Failed
+delivery keeps the previous link usable until it expires.
+
+The app stores only the session token in Expo SecureStore and checks it with
+`GET /api/v1/auth/me` when it starts. Expired or revoked sessions return to the
+login option. Temporary connection failures keep the token and show **Retry
+session**; public browsing remains available. **Log out** revokes the session
+on the server before removing it from the device. If logout cannot reach the
+server, reconnect and retry. An already expired or revoked token can be removed
+locally without another successful revocation.
+
+After login, open **My listings**, then **Create listing**. Enter the details and
+choose up to five optional photos. Preview or remove photos and tap a photo to
+make it the cover before selecting **Publish listing**. You can publish with no
+photos. If a selected photo is rejected, the form keeps your draft for correction.
+Later, **Add or replace photos** replaces an active item's entire photo set.
+JPEG, PNG and HEIC are accepted, up to 8 MiB and 20 megapixels each. HEIC becomes
+JPEG for display. Open a sold item from **My listings** to see its owner-only details.
+
+Use **Edit** to update an active listing. If your copy is stale, **Reload listing**
+to fetch the current revision. **Mark Sold** keeps the item in My listings, and
+**Delete** removes it. Both actions ask for confirmation.
+
+Run `npm test` in `frontend/` for the client protocol and rendered component
+tests. These run the real React components and account client with substituted
+native controls, device storage and HTTP responses. They do not replace testing
+SecureStore and interaction on an iOS or Android device.
+
 | Route | Result |
 | --- | --- |
 | `GET /health` | Service health |
-| `GET /api/v1/listings?q=dorm` | Active listings; optional case-insensitive title/description search |
+| `GET /api/v1/listings?q=dorm&page=1&per=20` | Active listings; optional case-insensitive title/description search with database-side pagination. `X-Page`, `X-Page-Size`, and `X-Has-More` describe the returned page. |
 | `GET /api/v1/listings/desk-lamp` | One public listing, including integer price in USD cents, seller display name, general pickup area and ordered photo URLs |
-| `POST /api/v1/listings` | Creates an active listing for the signed-in verified seller; `401`/`403` without a verified session, `422` with per-field errors |
+| `POST /api/v1/listings` | Creates an active listing for the signed-in verified seller; `401` without a valid verified session, `422` with per-field errors |
+| `POST /api/v1/listings/:id/photos` | Replaces an active owned listing's photos; bearer session and multipart `photos[]` required |
 | `GET /api/v1/listings/bike` | 404 for sold item; missing IDs also return 404 |
 
-With the API running, run `node tests/api-smoke.mjs` from the root. Set `API_URL` if using a different host or port. In `frontend/`, run `npm run typecheck` and `npx expo export --platform ios` to check the TypeScript and bundle. GitHub Actions runs these checks and the API smoke test when the repository is pushed. A bundle export does not replace a simulator test.
+With the API running, run `node tests/api-smoke.mjs` from the root. For a full Sprint 2 pass over the client contract, run `API_URL=http://localhost:8080 SMOKE_TOKEN=<verified account token> node tests/sprint2-smoke.mjs`; it publishes, uploads a photo, browses with filters and sort across pages, edits under `If-Match`, marks sold and cleans up, and skips with a message when no token is supplied. It publishes twice, so a fresh account avoids the five-per-ten-minutes quota. Set `API_URL` if using a different host or port. In `frontend/`, run `npm run typecheck` and `npx expo export --platform ios` to check the TypeScript and bundle. GitHub Actions runs these checks and the API smoke test when the repository is pushed. A bundle export does not replace a simulator test.
 
 ## Sprint scope and next steps
 
-The `sprint-1` backend adds guarded My Listings list/detail routes and search
-regression tests. See [the backend integration contract](backend/README.md)
-for response shapes and frontend handoff. My Listings requires the accounts
-teammate's verified-session integration before it is usable outside tests.
+The `sprint-1` backend connects SQLite-backed account sessions to publishing
+and My Listings. See [the backend integration contract](backend/README.md)
+for response shapes, email configuration and frontend handoff. Accounts,
+sessions, listings and ordered photo links persist in SQLite.
 
 The [Sprint 1 requirements](https://docs.google.com/document/d/1-CAXYMrqLGVpVqagoc3pTq0-hFtWgDgeiopG4IKuBoI/edit) list eight stories. The [initial architecture](https://docs.google.com/document/d/1yfwpq67uj-kCq9D3l9fatBFhQF8GssEcRgc2EJTU-5M/edit) describes a larger plan. This repository uses React Native in place of SwiftUI and follows the explicit sprint list for search (R7). The client only talks to the API.
 
@@ -37,9 +76,16 @@ The [Sprint 1 requirements](https://docs.google.com/document/d/1-CAXYMrqLGVpVqag
 | --- | --- |
 | R1–2: Browse and details | API and app wired to sample data; active-only feed, unavailable detail, gallery/placeholder, loading, empty and retry states. |
 | R7: Search | Implemented against the sample catalog; preserve the query when returning from details. |
-| R3–4: Accounts and sessions | Planned. Require exact `ku.edu` domain and mailbox proof via an expiring single-use link. Use a managed identity service or reviewed password hashing, securely store the session on-device, revoke it on logout. |
-| R5, R8: Publish and My Listings | Planned. Add relational persistence, verified sessions, server-derived seller identity, client and server validation, and owner-only access for private listings and changes. |
-| R6: Photo upload | Planned. Attach up to five ordered photos after listing creation. Check ownership, byte size, type and decodability before linking object storage keys. The first image is primary. |
+| R3–4: Accounts and sessions | Registration, verification instructions, password login, session restoration and logout connected in the app. SQLite-backed sessions authorize protected listing routes. Native tokens use SecureStore; real email requires provider configuration. |
+| R5, R8: Publish and My Listings | Authenticated creation and My Listings screens connected to backend validation and owner-only reads. Listings, ownership, status and ordered photo links persist across backend restarts. |
+| R6: Photo upload | Owner-authorized upload, image decoding, ordering and replacement connected in the app. Files use a persistent local Docker volume; the first image is primary. |
 
-Open team decisions: identity/email service, relational database, image storage and HTTPS host. No write or authentication endpoints are exposed yet. Before GTA handoff, deploy an HTTPS API, test the iOS simulator build against it, and record the Xcode, simulator and toolchain versions. Messaging, offers, favorites and moderation are outside this starter.
+SQLite stores accounts, sessions and listings. The backend includes a Resend email adapter;
+configure it as described in the backend README, or use development-only logged
+verification links with fictional accounts. Uploaded files persist in the
+`marketplace-uploads` Docker volume; listing records and photo links persist in
+the `marketplace-data` volume. Preserve both volumes when recreating containers.
+The HTTPS host remains deployment work. Before GTA handoff, deploy an HTTPS API, test the iOS
+simulator build against it, and record the Xcode, simulator and toolchain
+versions. Messaging, offers, favorites and moderation are outside this starter.
 

@@ -1,15 +1,35 @@
 # Sprint 1: My Listings and search
 
-This backend slice supports My Listings and public search. It still uses an
-in-memory sample catalog. Session verification and persistent listing creation
-belong to the separate accounts/publish features.
+This backend supports accounts, sessions, publishing, My Listings and public
+search. Accounts, credentials, listings and ordered photo links persist in
+SQLite. Uploaded image bytes live in the separate upload directory.
+
+## Required environment
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_PATH` | SQLite file, default `marketplace.sqlite` |
+| `PRIVATE_MESSAGE_KEY_BASE64` | 32 random bytes, base64. Private messages are encrypted at rest; without it the messaging routes return `500 Internal Server Error` |
+| `DEV_EMAIL_VERIFICATION` | `true` logs the verification link instead of sending mail |
+| `RESEND_API_KEY` + `VERIFICATION_FROM_EMAIL` | real verification delivery |
+| `DEPLOYED_HTTPS` | `true` adds HSTS once a deployment enforces HTTPS |
+
+Generate the message key with `openssl rand -base64 32`. The CI test stage sets a
+fixture key; a local compose run needs one in the environment or `.env`.
 
 ## Public feed
 
-`GET /api/v1/listings` and `GET /api/v1/listings/:id` read one in-memory listing
-store seeded with the sample rows, so rows added at runtime (by the publish
-endpoint later in this sprint) appear without a restart. Added rows surface
-ahead of the sample rows; within a batch the newest is first.
+`GET /api/v1/listings` and `GET /api/v1/listings/:id` read the SQLite catalog.
+Published listings appear immediately and survive a restart. Newest listings
+appear first; a database sequence keeps their order stable across restarts.
+The listing migration inserts the sample rows once, preserving their existing
+IDs and order. Later startups do not reinsert or overwrite those rows.
+
+The additive listing migration preserves existing account and credential
+tables. It stores each listing's public ID, owner ID, status, details and
+ordered photo URLs. Real owner IDs remain the account UUID strings; sample
+owners such as `sam` remain demo identities. The public API shapes are unchanged.
+Listings already lost by restarting an older in-memory backend cannot be recovered.
 
 - `photoURLs` is ordered: index 0 is the primary card photo. An empty array
   means the client renders its placeholder.
@@ -22,13 +42,14 @@ ahead of the sample rows; within a batch the newest is first.
 
 | Request | Success | Other responses |
 | --- | --- | --- |
-| `GET /api/v1/listings?q=dorm` | `200`, active listings matching title or description, ignoring case | |
+| `GET /api/v1/listings?q=dorm&page=1&per=20&sort=price_asc` | `200`, active listings matching title or description, ignoring case; filtering, ordering and pagination run in SQLite. Response headers `X-Page`, `X-Page-Size`, and `X-Has-More` describe the page. | `422` with `fieldErrors` when a filter value is invalid |
 | `GET /api/v1/listings/:id` | `200`, public active listing | `404` unavailable |
-| `POST /api/v1/listings` | `201`, created listing plus `Location` | `401` sign-in required; `403` email not verified; `422` field errors; `400` malformed JSON |
+| `POST /api/v1/listings` | `201`, created listing plus `Location` | `401` missing or invalid session; `422` field errors; `400` malformed JSON |
+| `POST /api/v1/listings/:id/photos` | `200`, listing with ordered replacement photo URLs | `400` malformed multipart; `401` invalid session; `404` not owned or inactive; `422` invalid photos; `413` request too large |
 | `GET /api/v1/me/listings` | `200`, array of owned entries | `401` sign-in required |
 | `GET /api/v1/me/listings/:id` | `200`, owned entry | `401` sign-in required; `404` missing, deleted, or owned by someone else |
 
-An owned entry is `{ "status": "active", "listing": { ... } }`. Its `listing`
+An owned entry is `{ "status": "active", "listing": { ... }, "revision": "...", "editedAt": "..." }`. Its `listing`
 has the same fields as a public listing, including `id`. My Listings includes
 active, reserved, and sold items, and excludes deleted items. Ownership uses a
 stable account ID, never a display name. Owner IDs are not exposed publicly.
@@ -41,13 +62,57 @@ stable account ID, never a display name. Owner IDs are not exposed publicly.
 - `401` means prompt for sign-in, not show an empty state.
 - Search trims surrounding whitespace and matches substrings. Clear it by
   omitting `q` or sending `q=`; both return all active listings.
+- Search pages default to 20 items and cap `per` at 50. Page numbers start at
+  1; invalid or missing values use the safe lower bound. Results are ordered
+  newest first and the response remains a JSON array for compatibility.
 - `200 []` for a nonempty search means show no results. Display errors separately.
   URL-encode search values.
 
+### Filters
+
+`GET /api/v1/listings` also accepts `category`, `condition`, `minPriceCents`, and
+`maxPriceCents`. They combine with `q` and pagination, apply to active listings
+only, and include both price boundaries.
+
+| Parameter | Rule |
+| --- | --- |
+| `category` | optional, at most 50 characters, matched exactly against the stored label (the form's chip values) |
+| `condition` | optional, one of `New`, `Like new`, `Good`, `Fair`, `Poor` in any case |
+| `minPriceCents` | optional whole number of cents, `0` or more |
+| `maxPriceCents` | optional whole number of cents, `0` or more |
+
+Blank values are ignored, so a cleared filter can be sent as an empty string.
+`minPriceCents` greater than `maxPriceCents`, a non-numeric price, a negative
+price, or an unknown condition returns `422` with the same `fieldErrors` shape
+as publish; several bad values are reported together. An unknown category is not
+an error: it simply matches nothing and returns `200 []`.
+
+### Ordering
+
+`sort` selects the feed order: `newest` (the default), `price_asc`, or
+`price_desc`. Prices compare numerically and the listing id breaks ties, so a
+page is stable when several rows share a price. Any other value returns `422`
+with `fieldErrors.sort`. Keyword, filters, and pagination all keep the chosen
+order.
+
+## Posting date and status
+
+Every public listing carries `postedAt`, a UTC ISO 8601 timestamp from the
+database row. It is the original posting time and never changes: editing a
+listing rotates its `revision` and sets `editedAt` in the owner view instead.
+`editedAt` is absent until the owner edits the listing or changes its status.
+
+Public cards and details only ever show active listings, so the client renders
+`Active`. Owner views read `status` (`active`, `reserved`, `sold`) and hide
+deleted rows. Format `postedAt`/`editedAt` in the device's local timezone; the
+server never sends a pre-formatted string.
+
 ## Publish contract
 
-`POST /api/v1/listings` takes JSON. Only these fields are read; the id, seller,
-and status are server-owned:
+`POST /api/v1/listings` accepts JSON when the seller publishes without photos.
+To publish with photos, send a multipart form containing a `listing` text
+part with the same JSON and one to five `photos[]` file parts in display order.
+Both formats use the following fields. The server assigns the ID, seller and status.
 
 | Field | Rule |
 | --- | --- |
@@ -65,45 +130,177 @@ and status are server-owned:
   "fieldErrors": { "title": "Title is required.", "priceCents": "Price must be between $0.01 and $100,000.00." } }
 ```
 
-`401` means prompt for sign-in. `403` means the account exists but the KU email
-is still unverified. A `201` returns the created listing with its server-minted
-`id`, so navigate with `Location` or the body `id`. Photos are attached by the
-separate photo-upload feature; `photoURLs` is empty at creation.
+`401` means the session is missing, invalid, expired, revoked, or belongs to an
+unverified account. Login itself returns `403` for an unverified account.
+A `201` returns the created listing with its server-minted `id` and ordered
+`photoURLs`. The server validates the fields and prepares all selected photos
+before inserting the public listing. A rejected photo or unsuccessful storage
+operation leaves the listing unpublished. A photo-free listing has an empty
+`photoURLs` array. Sellers can use the photo-upload endpoint to update photos later.
 
 The frontend form must mirror these rules for instant feedback. The server
 stays authoritative: never send `sellerDisplayName`, `ownerID`, `id`, or
 `status`, and expect them to be ignored if sent.
 
-## Accounts teammate integration
+## Edit owned listings
 
-`MarketplaceUser` in `Sources/Marketplace/Routes.swift` is the authentication
-boundary. Register the verified-session authenticator before the protected
-route guard and, only after validating the session, call:
+Fetch `GET /api/v1/me/listings/:id` with a bearer session to populate the edit
+form. Owned responses include an opaque `revision`. Send it in `If-Match` on
+`PATCH /api/v1/listings/:id`, with title, description, priceCents, category,
+and condition using the publish validation rules. A successful response is
+the updated owned listing, including its new revision.
 
-```swift
-request.auth.login(MarketplaceUser(id: verifiedAccountID,
-                                   displayName: accountDisplayName,
-                                   verified: accountIsVerified))
-```
+Only verified owners of active listings can edit. All fields are validated
+before saving; `422` returns the same field-error map as publishing. A missing
+revision returns `428`; a stale revision or inactive listing returns `409`.
+Missing, deleted, or other sellers' listings return `404`, and invalid sessions
+return `401`. Reload the owned detail before retrying a conflict. Concurrent
+saves with the same revision accept only one; revisions persist across restarts.
 
-The ID must match the listing's stored `ownerID`; the display name is what
-buyers see on a published listing. Never trust account IDs, display names, or
-the verified flag from headers, query parameters, or unverified tokens. The
-publish route re-checks `verified` and returns `403` when it is false, so a
-stale session cannot create listings. Sample IDs are `sam`, `avery`, and `jo`.
-The running server returns `401` for My Listings and publish requests until the
-accounts feature is integrated. There is no development login bypass. Only the
-test target installs a fake authenticated user.
+Edits preserve the public ID, owner, seller display name, original posting date,
+feed order, pickup area, and photos. The app offers Edit on active items in My
+listings, Cancel without saving, and Reload listing to discard the local draft
+and retrieve current values. The additive revision migration preserves existing
+Sprint 1 records.
+
+## Photo upload
+
+Send a bearer session and multipart file parts named `photos[]` in display
+order. The first is the cover. An upload replaces the complete set, with one
+to five JPEG, PNG or HEIC images, each at most 5 MiB and 20 megapixels. The
+request body limit is configured as `45mb`, including multipart overhead. Validation errors
+use `fieldErrors.photos`; ownership is checked against an active listing.
+
+libvips fully decodes and re-encodes each image, strips metadata, applies
+orientation and converts HEIC to JPEG. PNG stays PNG. Processed files must
+also fit the 5 MiB limit. Native builds need libvips: `brew install vips` on
+macOS or `apt install libvips-dev libheif-plugin-libde265` on Ubuntu 24.04.
+The Dockerfile installs both libvips and the HEIC decoder plugin.
+
+Each upload writes a separate staging directory, moves the complete set into
+place, then replaces its database URLs in a transaction. Validation or write failure
+keeps the old set; concurrent uploads cannot mix files or delete the winning
+set. Superseded files are removed only after the database commit. A failed
+database write removes the new files and preserves the old links and files.
+A process crash can leave
+unreferenced files; no background garbage collection is included.
+
+URLs under `/uploads/listings/` are public. Compose mounts
+`marketplace-uploads` at `/app/Public/uploads`. Preserve that volume when
+recreating containers. The `marketplace-data` volume holds the SQLite database
+at `/data/marketplace.sqlite`, including listing records and their photo links.
+Preserve and back up both volumes together. A normal backend restart preserves
+both records and files; `docker compose down -v` deletes the volumes.
+This remains a single-host deployment. Multiple backend replicas need a
+deployment design that shares both the database and image storage safely.
+
+## Session authentication
+
+`configureApplication` configures SQLite, applies the account and listing migrations,
+and registers auth and listing routes. The database volume preserves accounts,
+credentials and listings across container restarts. Most tests use a separate
+in-memory SQLite database; persistence tests reopen a temporary database file.
+
+The account API provides `POST /api/v1/auth/register`, `GET /api/v1/auth/verify`,
+`POST /api/v1/auth/resend-verification`, `POST /api/v1/auth/login`,
+`GET /api/v1/auth/me`, and `POST /api/v1/auth/logout`.
+Registration requires an exact `ku.edu` email address and a matching password
+of 12–72 UTF-8 bytes. Email verification links expire after 30 minutes. Login
+requires a verified account and returns a session token valid for seven days.
+
+Resend takes `{ "email": "student@ku.edu" }` without a session or password.
+An accepted request returns `200` with a generic `message` and
+`retryAfterSeconds: 60`; unknown and already verified accounts receive the
+same response without sending mail. Invalid KU addresses return `400`.
+An unverified account may request one link per 60 seconds, including the
+initial registration and failed delivery attempts. An early retry returns
+`429`, a `Retry-After` header and `{ "reason": "...", "retryAfterSeconds": N }`.
+
+The cooldown lives in SQLite and survives backend restarts. A pending credential
+reserves the attempt before contacting the email provider. Its fixed 30-minute
+expiry also records the issue time, so no schema change is needed. Pending
+links cannot verify an account. Provider delivery has a 10-second timeout and
+runs outside the database transaction. Successful delivery activates the new
+link and invalidates older verification links atomically; a failed delivery
+returns `503` and preserves the previous usable link. Resend keeps the account
+UUID, password and sessions unchanged. Verification consumes the link and
+marks the account verified in one transaction.
+
+Send `Authorization: Bearer <session token>` to publish, upload photos or read My Listings.
+`SessionAuthenticator` runs before the listing guards. It uses `currentSession`
+to check the token hash, session kind, expiry, revocation and current account
+verification in SQLite. Auth profile and logout use the same validator.
+Missing or invalid credentials return `401`. Verification-link tokens cannot
+authorize listing requests. Logout revokes the presented session; other
+sessions for that account remain valid. Public browse and details do not
+require authentication.
+
+After validation, the authenticator creates `AuthenticatedUser`
+from the stored `Account`. Its String ID comes from
+`try account.requireID().uuidString`; publishing stores that exact value as
+`ownerID`. The client cannot choose the seller ID or verification state.
+Sample owners such as `sam` are fixtures, not real login accounts.
+
+`Account` is the Fluent database model in `Accounts.swift`; `AuthenticatedUser`
+is the request identity used by route guards. The table remains
+`marketplace_users`, and the migration remains `CreateMarketplaceUsers` so the
+Swift model rename does not recreate tables in existing sprint-1 databases.
+
+For real email delivery, set `RESEND_API_KEY`, `VERIFICATION_FROM_EMAIL`, and
+`PUBLIC_API_URL` to the deployed HTTPS API URL. For local testing with fictional
+accounts only, set `DEV_EMAIL_VERIFICATION=true` before starting Compose. This
+prints verification links to backend logs instead of sending email. Keep this
+mode disabled for real accounts. The default is disabled.
+
+The frontend includes registration, verification instructions, login,
+session restoration, logout, publishing, My Listings and photo replacement.
 
 ## Verification
 
 From the repo root run `docker build --target test -t marketplace-tests ./backend`.
-Alternatively run `swift test` inside `backend/` with a compatible toolchain.
+Alternatively install libvips and run `swift test` inside `backend/` with a compatible toolchain.
 Tests cover unauthorized/forged identity, owner isolation, owned details, empty
 lists, deleted items, mixed-case title/description search, clear, no matches,
 live feed ordering, publish auth (`401`/`403`), per-field validation, and
-server-derived seller association.
+server-derived seller association. `SessionTests` exercises real SQLite
+credentials, password login, UUID ownership, account isolation, expiry,
+revocation, wrong token kinds, unverified accounts, and logout. These tests do
+not install the fake identity helper used by the isolated listing tests.
 They use [VaporTesting](https://docs.vapor.codes/advanced/testing/).
 
+`PhotoTests` uses real database sessions, multipart decoding, libvips and disk
+storage. It covers ordered upload/public retrieval, owner and session guards,
+corrupt and oversized inputs, replacement, filesystem failure and concurrent
+uploads. Frontend component tests substitute the device picker and native
+multipart encoder; verify library permissions and upload on a device as well.
+
+`PersistenceTests` closes and reopens a temporary SQLite file to check listing
+details, ordering, saved sessions, ownership, ordered photo links and public
+image bytes. It also checks upgrades from the account-only schema and safe
+recovery when the listing migration has completed before its history is saved.
+
+`VerificationTests` uses real SQLite and HTTP routes with only email delivery
+substituted. It covers expired-link recovery, old-link invalidation, cooldowns,
+concurrent requests, delivery failure, account preservation and restart recovery.
+
 With the API running, `node tests/api-smoke.mjs` checks the public API and denial
-of unverified credentials. CI runs both checks.
+of unverified credentials. `node tests/auth-smoke.mjs` checks auth error paths.
+CI runs the Swift tests and both smoke scripts. Email delivery requires a
+separate provider check.
+
+
+## Mark sold and delete
+
+`POST /api/v1/listings/:id/sold` marks an owned active or reserved listing sold.
+`DELETE /api/v1/listings/:id` soft-deletes an owned listing, including sold items.
+Both require a verified bearer session and the current owned-response `revision`
+in `If-Match`. They return the updated owned listing and revision (`200`).
+Missing revisions return `428`, stale changes `409`, invalid sessions `401`, and
+missing/other-owner listings `404`. Repeating an already completed action is
+idempotent so a retry after a lost response does not fail or resurrect a listing.
+
+Sold listings remain in the owner's history but leave public feed, search, and
+details. Deleted listings also leave My Listings. Neither can be edited or have
+photos replaced. IDs, original dates, seller identity, and existing image files
+are preserved; deletion is not a physical purge of stored images. The app asks
+for confirmation, retains cards on failure, and offers reload after conflicts.
