@@ -61,7 +61,7 @@ SecureStore and interaction on an iOS or Android device.
 | `POST /api/v1/listings/:id/photos` | Replaces an active owned listing's photos; bearer session and multipart `photos[]` required |
 | `GET /api/v1/listings/bike` | 404 for sold item; missing IDs also return 404 |
 
-With the API running, run `node tests/api-smoke.mjs` from the root. Set `API_URL` if using a different host or port. In `frontend/`, run `npm run typecheck` and `npx expo export --platform ios` to check the TypeScript and bundle. GitHub Actions runs these checks and the API smoke test when the repository is pushed. A bundle export does not replace a simulator test.
+With the API running, run `node tests/api-smoke.mjs` from the root. For a full Sprint 2 pass over the client contract, run `API_URL=http://localhost:8080 SMOKE_TOKEN=<verified account token> node tests/sprint2-smoke.mjs`; it publishes, uploads a photo, browses with filters and sort across pages, edits under `If-Match`, marks sold and cleans up, and skips with a message when no token is supplied. It publishes twice, so a fresh account avoids the five-per-ten-minutes quota. Set `API_URL` if using a different host or port. In `frontend/`, run `npm run typecheck` and `npx expo export --platform ios` to check the TypeScript and bundle. GitHub Actions runs these checks and the API smoke test when the repository is pushed. A bundle export does not replace a simulator test.
 
 ## Sprint scope and next steps
 
