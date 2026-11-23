@@ -3,6 +3,7 @@ import { ActivityIndicator, Image, Pressable, StyleSheet, Text, View } from 'rea
 import { Image as AssetImage } from 'expo-image';
 import { useFonts, PlusJakartaSans_400Regular, PlusJakartaSans_500Medium, PlusJakartaSans_700Bold } from '@expo-google-fonts/plus-jakarta-sans';
 import { ApiError, deleteListing, Listing, markListingSold, OwnedListing, photoThumbnailURL } from './api';
+import { formatDate, postedLabel } from './dates';
 
 type Props = {
   item: OwnedListing; token: string; disabled: boolean;
@@ -63,6 +64,8 @@ export function OwnedListingCard(p: Props) {
           <Text style={[s.status, bold, status === 'sold' && s.sold]}>{status === 'sold' ? 'Sold' : status === 'reserved' ? 'Reserved' : 'Active'}</Text></View>
         <Text style={[s.title, bold]}>{listing.title}</Text>
         <Text style={[s.small, font]} numberOfLines={2}>{listing.description}</Text>
+        <Text style={[s.small, font]}>{postedLabel(listing.postedAt)}
+          {p.item.editedAt ? ` · Edited ${formatDate(p.item.editedAt)}` : ''}</Text>
         {!confirmation && <>
           <View style={s.actions}>
             {status === 'active' && action(`Edit ${listing.title}`, 'Edit', p.onEdit)}

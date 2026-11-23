@@ -20,6 +20,8 @@ final class ListingRecord: Model, @unchecked Sendable {
     @Field(key: "photo_urls") var photoURLs: [String]
     @Field(key: "created_at") var createdAt: Date
     @OptionalField(key: "revision") var revision: String?
+    /// Set the first time the owner edits or changes status; nil until then.
+    @OptionalField(key: "updated_at") var updatedAt: Date?
 
     init() {}
 
@@ -41,7 +43,12 @@ final class ListingRecord: Model, @unchecked Sendable {
     var listing: Listing {
         Listing(id: listingID, title: title, description: description, priceCents: priceCents,
                 condition: condition, category: category, sellerDisplayName: sellerDisplayName,
-                pickupArea: pickupArea, photoURLs: photoURLs)
+                pickupArea: pickupArea, photoURLs: photoURLs,
+                postedAt: createdAt.ISO8601Format())
+    }
+
+    var editedAt: String? {
+        updatedAt?.ISO8601Format()
     }
 }
 
@@ -66,6 +73,7 @@ struct CreateListings: AsyncMigration {
                 .field("photo_urls", .json, .required)
                 .field("created_at", .datetime, .required)
                 .field("revision", .string)
+                .field("updated_at", .datetime)
                 .ignoreExisting()
                 .create()
             // Seed once as part of the migration. Reverse insertion preserves the current
@@ -98,5 +106,21 @@ struct AddListingRevisions: AsyncMigration {
 
     func revert(on db: any Database) async throws {
         try await db.schema(ListingRecord.schema).deleteField("revision").update()
+    }
+}
+
+/// Existing databases predate the last-edited column. Null means never edited.
+struct AddListingUpdatedAt: AsyncMigration {
+    func prepare(on db: any Database) async throws {
+        guard let sql = db as? any SQLDatabase else { return }
+        struct Column: Decodable { let name: String }
+        let columns = try await sql.raw("PRAGMA table_info(listings)").all(decoding: Column.self)
+        if !columns.contains(where: { $0.name == "updated_at" }) {
+            try await db.schema(ListingRecord.schema).field("updated_at", .datetime).update()
+        }
+    }
+
+    func revert(on db: any Database) async throws {
+        try await db.schema(ListingRecord.schema).deleteField("updated_at").update()
     }
 }

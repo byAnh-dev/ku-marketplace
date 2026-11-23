@@ -8,7 +8,9 @@ struct Listing: Content {
     let id, title, description: String
     let priceCents: Int
     let condition, category, sellerDisplayName, pickupArea: String
-    let photoURLs: [String]
+    let photoURLs: [String] // Primary photo first; never include storage credentials.
+    /// Posting time in UTC, ISO 8601. Editing a listing never changes it.
+    var postedAt: String? = nil
 }
 
 struct Catalog: Sendable {
@@ -189,13 +191,15 @@ struct Catalog: Sendable {
         return OwnedListing(
             status: status,
             listing: record.listing,
-            revision: record.revision ?? "initial"
+            revision: record.revision ?? "initial",
+            editedAt: record.editedAt
         )
     }
 
     // Five new listings per rolling ten minutes.
     // A transaction serializes the quota check with the insert.
-    func add(_ listing: Listing, ownerID: String) async throws {
+    @discardableResult
+    func add(_ listing: Listing, ownerID: String) async throws -> Listing {
         try await database.transaction { db in
             guard let sql = db as? any SQLDatabase else {
                 throw Abort(.internalServerError)
@@ -246,6 +250,9 @@ struct Catalog: Sendable {
             )
 
             try await record.create(on: db)
+
+            // Return the stored shape so the caller sees the real posting date.
+            return record.listing
         }
     }
 
@@ -297,13 +304,15 @@ struct Catalog: Sendable {
 
             let nextRevision = UUID().uuidString
             record.revision = nextRevision
+            record.updatedAt = Date()
 
             try await record.update(on: db)
 
             return OwnedListing(
                 status: .active,
                 listing: record.listing,
-                revision: nextRevision
+                revision: nextRevision,
+                editedAt: record.editedAt
             )
         }
     }
@@ -340,7 +349,8 @@ struct Catalog: Sendable {
                 return OwnedListing(
                     status: target,
                     listing: record.listing,
-                    revision: record.revision ?? "initial"
+                    revision: record.revision ?? "initial",
+                    editedAt: record.editedAt
                 )
             }
 
@@ -372,13 +382,15 @@ struct Catalog: Sendable {
 
             record.status = target.rawValue
             record.revision = nextRevision
+            record.updatedAt = Date()
 
             try await record.update(on: db)
 
             return OwnedListing(
                 status: target,
                 listing: record.listing,
-                revision: nextRevision
+                revision: nextRevision,
+                editedAt: record.editedAt
             )
         }
     }
@@ -478,4 +490,6 @@ struct OwnedListing: Content {
     let status: Catalog.Status
     let listing: Listing
     let revision: String
+    /// Last time the owner changed this listing; nil until the first change.
+    var editedAt: String? = nil
 }

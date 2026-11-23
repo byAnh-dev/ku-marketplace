@@ -49,7 +49,7 @@ Listings already lost by restarting an older in-memory backend cannot be recover
 | `GET /api/v1/me/listings` | `200`, array of owned entries | `401` sign-in required |
 | `GET /api/v1/me/listings/:id` | `200`, owned entry | `401` sign-in required; `404` missing, deleted, or owned by someone else |
 
-An owned entry is `{ "status": "active", "listing": { ... } }`. Its `listing`
+An owned entry is `{ "status": "active", "listing": { ... }, "revision": "...", "editedAt": "..." }`. Its `listing`
 has the same fields as a public listing, including `id`. My Listings includes
 active, reserved, and sold items, and excludes deleted items. Ownership uses a
 stable account ID, never a display name. Owner IDs are not exposed publicly.
@@ -94,6 +94,18 @@ an error: it simply matches nothing and returns `200 []`.
 page is stable when several rows share a price. Any other value returns `422`
 with `fieldErrors.sort`. Keyword, filters, and pagination all keep the chosen
 order.
+
+## Posting date and status
+
+Every public listing carries `postedAt`, a UTC ISO 8601 timestamp from the
+database row. It is the original posting time and never changes: editing a
+listing rotates its `revision` and sets `editedAt` in the owner view instead.
+`editedAt` is absent until the owner edits the listing or changes its status.
+
+Public cards and details only ever show active listings, so the client renders
+`Active`. Owner views read `status` (`active`, `reserved`, `sold`) and hide
+deleted rows. Format `postedAt`/`editedAt` in the device's local timezone; the
+server never sends a pre-formatted string.
 
 ## Publish contract
 

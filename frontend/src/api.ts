@@ -6,6 +6,8 @@ export const apiBase = (process.env.EXPO_PUBLIC_API_URL || `http://${host}:8080`
 export type Listing = {
   id: string; title: string; description: string; priceCents: number; condition: string;
   category: string; sellerDisplayName: string; pickupArea: string; photoURLs: string[];
+  /** UTC ISO 8601 posting time. */
+  postedAt?: string;
 };
 export type ListingPage = { items: Listing[]; page: number; per: number; hasMore: boolean };
 export type ListingFilters = {
@@ -13,7 +15,9 @@ export type ListingFilters = {
 };
 export type ListingSort = 'newest' | 'price_asc' | 'price_desc';
 
-export type OwnedListing = { status: 'active' | 'sold' | 'reserved' | 'deleted'; listing: Listing; revision: string };
+export type OwnedListing = { status: 'active' | 'sold' | 'reserved' | 'deleted'; listing: Listing; revision: string;
+  /** UTC ISO 8601 last change; absent until the owner edits or changes status. */
+  editedAt?: string };
 export type CreateListingBody = {
   title: string; description: string; priceCents: number;
   category: string; condition: string; pickupArea: string;

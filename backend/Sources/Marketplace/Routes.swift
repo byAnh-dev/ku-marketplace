@@ -149,10 +149,12 @@ func configureRoutes(
                 photoURLs: urls
             )
 
+            var stored = listing
+
             do {
                 // Catalog.add applies the persistent rolling
                 // five-listings-per-ten-minutes limit.
-                try await catalog.add(
+                stored = try await catalog.add(
                     listing,
                     ownerID: user.id
                 )
@@ -173,7 +175,7 @@ func configureRoutes(
                 value: "/api/v1/listings/\(listing.id)"
             )
 
-            try response.content.encode(listing)
+            try response.content.encode(stored)
             return response
 
         } catch let failure as ListingFieldErrors {
