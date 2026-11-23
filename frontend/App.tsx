@@ -3,6 +3,7 @@ import { ActivityIndicator, Button, FlatList, Image, Pressable, SafeAreaView, Sc
 import { StatusBar } from 'expo-status-bar';
 import { ApiError, detail, Listing, ListingFilters, ListingSort, ownedListing, photoURL, search } from './src/api';
 import { listingCategories, listingConditions } from './src/listingChoices';
+import { postedLabel } from './src/dates';
 import { AuthScreen } from './src/AuthScreen';
 import { logout, restoreSession, Session } from './src/auth';
 import { MyListings } from './src/MyListings';
@@ -81,6 +82,8 @@ function Details({ id, back, ownerToken, contact, token, onExpired }: { id: stri
       <Text style={s.body}>{state.value.listing.description}</Text>
       <Text style={s.body}>Condition: {state.value.listing.condition}</Text>
       <Text style={s.body}>Seller: {state.value.listing.sellerDisplayName}</Text>
+      {!!postedLabel(state.value.listing.postedAt) && <Text style={s.label}>{postedLabel(state.value.listing.postedAt)}</Text>}
+      {!ownerToken && <Text style={s.body}>Status: Active</Text>}
       {!ownerToken && <Button title={token ? 'Message seller' : 'Log in to message seller'} disabled={checking} onPress={() => messageSeller(state.value.listing)} />}
       {!!contactError && <Text accessibilityRole="alert">{contactError}</Text>}
       <Text style={s.body}>Pickup: {state.value.listing.pickupArea}</Text>
@@ -201,6 +204,7 @@ function Market({ query, setQuery, filters, setFilters, sort, setSort, open, acc
         renderItem={({ item }) => <Pressable accessibilityRole="button" style={s.card} onPress={() => open(item.id)}>
           <Photo uri={item.photoURLs[0]} /><Text style={s.label}>{item.category}</Text>
           <Text style={s.title}>{item.title}</Text><Text style={s.price}>{money(item.priceCents)}</Text>
+          {!!postedLabel(item.postedAt) && <Text style={s.label}>{postedLabel(item.postedAt)}</Text>}
         </Pressable>}
         ListFooterComponent={<View style={s.pagination}>
           {page > 1 && <Button title="Previous page" onPress={() => setPage(current => current - 1)} />}
