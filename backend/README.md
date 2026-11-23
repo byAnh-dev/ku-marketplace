@@ -4,6 +4,19 @@ This backend supports accounts, sessions, publishing, My Listings and public
 search. Accounts, credentials, listings and ordered photo links persist in
 SQLite. Uploaded image bytes live in the separate upload directory.
 
+## Required environment
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_PATH` | SQLite file, default `marketplace.sqlite` |
+| `PRIVATE_MESSAGE_KEY_BASE64` | 32 random bytes, base64. Private messages are encrypted at rest; without it the messaging routes return `500 Internal Server Error` |
+| `DEV_EMAIL_VERIFICATION` | `true` logs the verification link instead of sending mail |
+| `RESEND_API_KEY` + `VERIFICATION_FROM_EMAIL` | real verification delivery |
+| `DEPLOYED_HTTPS` | `true` adds HSTS once a deployment enforces HTTPS |
+
+Generate the message key with `openssl rand -base64 32`. The CI test stage sets a
+fixture key; a local compose run needs one in the environment or `.env`.
+
 ## Public feed
 
 `GET /api/v1/listings` and `GET /api/v1/listings/:id` read the SQLite catalog.
@@ -115,13 +128,13 @@ Sprint 1 records.
 
 Send a bearer session and multipart file parts named `photos[]` in display
 order. The first is the cover. An upload replaces the complete set, with one
-to five JPEG, PNG or HEIC images, each at most 8 MiB and 20 megapixels. The
+to five JPEG, PNG or HEIC images, each at most 5 MiB and 20 megapixels. The
 request body limit is configured as `45mb`, including multipart overhead. Validation errors
 use `fieldErrors.photos`; ownership is checked against an active listing.
 
 libvips fully decodes and re-encodes each image, strips metadata, applies
 orientation and converts HEIC to JPEG. PNG stays PNG. Processed files must
-also fit the 8 MiB limit. Native builds need libvips: `brew install vips` on
+also fit the 5 MiB limit. Native builds need libvips: `brew install vips` on
 macOS or `apt install libvips-dev libheif-plugin-libde265` on Ubuntu 24.04.
 The Dockerfile installs both libvips and the HEIC decoder plugin.
 

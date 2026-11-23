@@ -70,7 +70,10 @@ import VaporTesting
             #expect(try await ConversationRecord.query(on: app.db).count() == 2)
             let messages = try await MessageRecord.query(on: app.db).all()
             try #require(messages.count == 1)
-            #expect(messages[0].body == "Is this available?" && messages[0].readAt == nil)
+            // Bodies are encrypted at rest now; the stored value must never be the plaintext.
+            #expect(try MessageEncryption.decrypt(messages[0].body) == "Is this available?")
+            #expect(messages[0].body != "Is this available?")
+            #expect(messages[0].readAt == nil)
         }
     }
 }
