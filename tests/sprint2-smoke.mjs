@@ -89,8 +89,10 @@ try {
   const pageOne = await call(`listings?q=${encodeURIComponent(keyword)}&per=1&page=1`);
   const pageTwo = await call(`listings?q=${encodeURIComponent(keyword)}&per=1&page=2`);
   assert.equal(pageOne.headers.get('x-has-more'), 'true', 'a full first page must report more pages');
+  assert.equal(pageOne.body.length, 1, 'page one must hold exactly one row at per=1');
   assert.equal(pageOne.body[0].id, newest[0].id, 'the first page must follow the same order');
-  assert.notEqual(pageTwo.body[0]?.id, pageOne.body[0]?.id, 'page two must not repeat page one');
+  assert.equal(pageTwo.body.length, 1, 'the second page must not come back empty');
+  assert.notEqual(pageTwo.body[0].id, pageOne.body[0].id, 'page two must not repeat page one');
 
   const details = await call(`listings/${cheaper.id}`);
   assert.equal(details.status, 200);
@@ -100,6 +102,7 @@ try {
   const owned = await call(`me/listings/${cheaper.id}`, { headers: auth });
   assert.equal(owned.status, 200);
   assert.equal(owned.body.status, 'active');
+  assert.equal(typeof owned.body.revision, 'string', 'the owner view must carry an If-Match revision');
   assert.equal(owned.body.editedAt ?? null, null, 'a fresh listing has not been edited');
 
   const edited = await call(`listings/${cheaper.id}`, {
@@ -110,6 +113,8 @@ try {
   assert.equal(edited.status, 200, `edit must succeed, got ${edited.status} ${JSON.stringify(edited.body)}`);
   assert.equal(edited.body.listing.postedAt, cheaper.postedAt, 'editing must not move the posting date');
   assert.ok(edited.body.editedAt, 'editing must stamp the last edit');
+  assert.equal(typeof edited.body.revision, 'string', 'the edit must return the next If-Match revision');
+  assert.notEqual(edited.body.revision, owned.body.revision, 'an edit must rotate the revision');
   created[0].listing = edited.body.listing;
 
   // The app's optimistic-concurrency branch: a stale revision must be refused.
