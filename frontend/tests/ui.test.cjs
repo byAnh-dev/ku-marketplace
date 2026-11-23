@@ -940,3 +940,29 @@ test('marketplace filters combine with the keyword, reject a bad range, and clea
   await press(ui, 'Apply filters');
   assert.match(h.requests.at(-1).url, /category=Dorm%20%26%20Living/);
 });
+
+test('sorting changes the feed order and keeps the keyword and filters', async t => {
+  const h = harness();
+  const ui = await mount(t, h.App);
+  await fill(ui, 'Search listings', 'desk');
+
+  await press(ui, 'Lowest price');
+  assert.match(h.requests.at(-1).url, /sort=price_asc/);
+  assert.match(h.requests.at(-1).url, /[?&]q=desk/);
+
+  await press(ui, 'Filters');
+  await press(ui, 'Textbooks');
+  await press(ui, 'Apply filters');
+  assert.match(h.requests.at(-1).url, /sort=price_asc/);
+  assert.match(h.requests.at(-1).url, /category=Textbooks/);
+
+  await press(ui, 'Highest price');
+  assert.match(h.requests.at(-1).url, /sort=price_desc/);
+
+  // Newest is the default, so it must not be sent as an explicit parameter.
+  await press(ui, 'Newest');
+  const newest = h.requests.at(-1).url;
+  assert.doesNotMatch(newest, /sort=/);
+  assert.match(newest, /category=Textbooks/);
+  assert.equal(inputValue(ui, 'Search listings'), 'desk');
+});
